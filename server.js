@@ -1,4 +1,4 @@
-// Load environment variables
+// Load environment variables 
 require("dotenv").config();
 
 const express = require("express");
@@ -123,17 +123,46 @@ const { Client, Environment } = require("square/legacy");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== Middleware =====
-const allowedOrigins = ["http://127.0.0.1:5500", "http://localhost:5500"];
+// ===== Render / proxy awareness (HTTPS cookies, etc.) =====
+if (process.env.NODE_ENV === "production") {
+  // Required so Express trusts Render's proxy and sees HTTPS correctly
+  app.set("trust proxy", 1);
+}
 
+// ===== Middleware =====
+
+// CORS: allow localhost for dev + shopsugarplum.co for production.
+// You can add your Render static-site URL here later if needed.
 const corsOptions = {
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    // Allow non-browser requests (no origin)
+    if (!origin) return callback(null, true);
+
+    const allowed = [
+      "http://127.0.0.1:5500",
+      "http://localhost:5500",
+      "https://shopsugarplum.co",
+      "https://www.shopsugarplum.co",
+    ];
+
+    if (allowed.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // In dev, be permissive so you can test from other origins if needed
+    if (process.env.NODE_ENV !== "production") {
+      return callback(null, true);
+    }
+
+    return callback(new Error("Not allowed by CORS"));
+  },
   credentials: true,
 };
 
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Session cookies: dev vs production (Render) behavior
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "change-this-secret",
@@ -141,8 +170,9 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: false, // keep false on localhost; set true when you ONLY run behind HTTPS
-      sameSite: "none",
+      // On Render (NODE_ENV=production) we use secure cookies + SameSite=None for cross-site admin use
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     },
   })
 );
@@ -908,7 +938,7 @@ app.post("/checkout", async (req, res) => {
       checkoutOptions: {
         redirectUrl:
           process.env.CHECKOUT_REDIRECT_URL ||
-          "https://phpstack-1556413-6032046.cloudwaysapps.com/thank-you.html",
+          "https://shopsugarplum.co/thank-you.html",
         prePopulateBuyerEmail: customer?.email || undefined,
       },
     };
@@ -1002,23 +1032,20 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
-// ===== Simple Admin Auth (DEV MODE – NO LOGIN) =====
-// WARNING: This bypasses all admin security. Use only on your
-// local machine while building/testing. Before going live,
-// restore the real version with session checks.
+// ===== Simple Admin Auth =====
+// In dev: allow everything.
+// In production on Render: require a logged-in admin session.
 
-/*
 function requireAdmin(req, res, next) {
+  if (process.env.NODE_ENV !== "production") {
+    // Dev mode: skip auth locally
+    return next();
+  }
+
   if (req.session && req.session.isAdmin) {
     return next();
   }
   return res.status(401).json({ error: "Not authorized" });
-}
-*/
-
-function requireAdmin(req, res, next) {
-  // Dev-only: allow every request through
-  return next();
 }
 
 app.post("/admin/login", (req, res) => {
