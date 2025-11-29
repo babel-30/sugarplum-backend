@@ -1,6 +1,21 @@
 // Load environment variables 
 require("dotenv").config();
 
+// ===== DEBUG ENV KEYS FOR SQUARE / RENDER =====
+console.log("DEBUG NODE_ENV:", process.env.NODE_ENV);
+console.log(
+  "DEBUG SQUARE env keys:",
+  Object.keys(process.env).filter((k) => k.includes("SQUARE"))
+);
+if (process.env.SQUARE_ACCESS_TOKEN) {
+  console.log(
+    "DEBUG SQUARE_ACCESS_TOKEN present, length:",
+    process.env.SQUARE_ACCESS_TOKEN.length
+  );
+} else {
+  console.log("DEBUG SQUARE_ACCESS_TOKEN is MISSING at process.env level");
+}
+
 const express = require("express");
 const cors = require("cors");
 const session = require("express-session");
