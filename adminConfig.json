@@ -1,0 +1,9 @@
+{
+  "bannerText": "✨ Upcoming Events: Latimer Country Market Saturday, November 29th 9am-2pm; Christmas on the Back Bay Saturday, December 13th 9am-4:30pm ✨",
+  "bannerVisible": true,
+  "popupEnabled": false,
+  "popupMode": "event",
+  "popupCustomText": "",
+  "shippingFlatRate": 6,
+  "freeShippingThreshold": 40
+}
