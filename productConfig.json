@@ -1008,30 +1008,57 @@
     "ribbonCustomText": ""
   },
   "DSWJJKYFTLKKAB2QMQYL2PL2": {
-    "isNew": true,
+    "isNew": false,
     "isFeatured": false,
-    "pinToTop": true,
+    "pinToTop": false,
     "hideOnline": false,
     "hideKiosk": false,
-    "ribbonType": "new",
+    "ribbonType": "none",
     "ribbonCustomText": ""
   },
   "SJ5HKV4SSOLV5KUTZS4OJOZ5": {
     "isNew": false,
-    "isFeatured": true,
-    "pinToTop": true,
+    "isFeatured": false,
+    "pinToTop": false,
     "hideOnline": false,
     "hideKiosk": false,
-    "ribbonType": "featured",
+    "ribbonType": "none",
     "ribbonCustomText": ""
   },
   "DEVVIXEZPNAV2TPZPUEMWLOO": {
     "isNew": false,
     "isFeatured": false,
-    "pinToTop": true,
+    "pinToTop": false,
     "hideOnline": false,
     "hideKiosk": false,
-    "ribbonType": "custom",
-    "ribbonCustomText": "Clearance"
+    "ribbonType": "none",
+    "ribbonCustomText": ""
+  },
+  "YW4GOURZTRLQ6DI3ATD4POSZ": {
+    "isNew": false,
+    "isFeatured": false,
+    "pinToTop": false,
+    "hideOnline": false,
+    "hideKiosk": false,
+    "ribbonType": "none",
+    "ribbonCustomText": ""
+  },
+  "M7HQGQM4L6XHNGY4EH4W7BKA": {
+    "isNew": false,
+    "isFeatured": false,
+    "pinToTop": false,
+    "hideOnline": false,
+    "hideKiosk": false,
+    "ribbonType": "none",
+    "ribbonCustomText": ""
+  },
+  "LF75ACHYJ5QTENEBOBIQ3GSO": {
+    "isNew": false,
+    "isFeatured": false,
+    "pinToTop": false,
+    "hideOnline": false,
+    "hideKiosk": false,
+    "ribbonType": "none",
+    "ribbonCustomText": ""
   }
 }

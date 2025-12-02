@@ -4,6 +4,6 @@
   "popupEnabled": false,
   "popupMode": "event",
   "popupCustomText": "",
-  "shippingFlatRate": 6,
+  "shippingFlatRate": 5,
   "freeShippingThreshold": 40
 }

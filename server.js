@@ -1,4 +1,4 @@
-// Load environment variables 
+// Load environment variables   
 require("dotenv").config();
 
 // ===== DEBUG ENV KEYS FOR SQUARE / RENDER =====
@@ -27,6 +27,412 @@ const fs = require("fs");
 const path = require("path");
 const archiver = require("archiver");
 const nodemailer = require("nodemailer");
+
+// Optional PDF support (packing list)
+let PDFDocument = null;
+try {
+  PDFDocument = require("pdfkit");
+} catch (err) {
+  console.warn(
+    'pdfkit not installed; packing slip PDF endpoint "/admin/orders/:id/packing-slip" will be disabled.'
+  );
+}
+
+// ===== EMAIL CONFIG & HELPERS =====
+const {
+  SMTP_HOST,
+  SMTP_PORT,
+  SMTP_USER,
+  SMTP_PASS,
+  EMAIL_FROM,
+  EMAIL_OWNER,
+} = process.env;
+
+let mailTransporter = null;
+
+if (SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && EMAIL_FROM) {
+  mailTransporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: Number(SMTP_PORT) || 587,
+    secure: Number(SMTP_PORT) === 465, // true for 465, false for 587/25
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS,
+    },
+  });
+} else {
+  console.warn(
+    "Email not fully configured – missing SMTP_* or EMAIL_FROM in .env"
+  );
+}
+
+async function sendEmail({ to, subject, text, html, bcc }) {
+  if (!mailTransporter) {
+    console.warn("sendEmail called but transporter is not configured");
+    return;
+  }
+
+  const message = {
+    from: EMAIL_FROM,
+    to,
+    subject,
+    text: text || "",
+    html: html || text || "",
+  };
+
+  if (bcc) {
+    message.bcc = bcc;
+  }
+
+  try {
+    await mailTransporter.sendMail(message);
+  } catch (err) {
+    console.error("Error sending email:", err);
+  }
+}
+
+// Try to turn a tracking number into a clickable URL
+function buildTrackingUrl(trackingNumber) {
+  if (!trackingNumber) return null;
+  const trimmed = trackingNumber.trim();
+
+  // If they pasted a full URL, just use it
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  // Otherwise, send them to a universal tracking page
+  return `https://www.17track.net/en/track?nums=${encodeURIComponent(trimmed)}`;
+}
+
+// Build a branded SPC email HTML body
+function buildBrandedEmail({
+  title,
+  intro,
+  lines = [],
+  trackingNumber,
+  trackingUrl, // kept for future use if you ever re-add a button
+  footerNote,
+  ctaLabel,
+  ctaUrl,
+}) {
+  const safeTitle = title || "Sugar Plum Creations";
+  const safeIntro = intro || "";
+  const footer = footerNote || "Thank you for supporting our small business!";
+
+  const logoUrl = "https://shopsugarplum.co/spc-logo-round.png";
+
+  const baseFontStack =
+    "'Handwash','Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,Arial,sans-serif";
+
+  const linesHtml = lines
+    .map(
+      (line) =>
+        `<p style="margin: 0 0 6px; font-size: 14px; font-family:${baseFontStack}; color:#fff5ff;">${line}</p>`
+    )
+    .join("");
+
+  // Tracking block with ONLY tracking number pill (no 17track button)
+  let trackingHtml = "";
+  if (trackingNumber) {
+    trackingHtml += `
+      <div style="margin-top: 16px;">
+        <p style="
+          margin: 0 0 8px;
+          font-size: 14px;
+          font-family:${baseFontStack};
+          color:#fff5ff;
+        ">
+          <strong>Tracking:</strong>
+        </p>
+
+        <!-- Tracking Number Pill -->
+        <div style="margin-bottom: 12px;">
+          <span style="
+            display:inline-block;
+            border:none;
+            border-radius:999px;
+            padding:0.35rem 0.75rem;
+            font-size:0.9rem;
+            background:#ffffff;
+            color:#6a4d7a;
+            font-weight:600;
+            font-family:${baseFontStack};
+          ">
+            ${trackingNumber}
+          </span>
+        </div>
+      </div>
+    `;
+  }
+
+  // Main CTA button (for things like "Pay Now", "View Order", etc.)
+  let ctaHtml = "";
+  if (ctaLabel && ctaUrl) {
+    ctaHtml = `
+      <div style="margin-top: 24px; text-align: center;">
+        <a href="${ctaUrl}"
+           style="
+             display:inline-block;
+             border:none;
+             border-radius:999px;
+             padding:0.4rem 0.9rem;
+             font-size:0.9rem;
+             cursor:pointer;
+             background:#ffffff;
+             color:#6a4d7a;
+             text-decoration:none;
+             font-family:${baseFontStack};
+             font-weight:600;
+           ">
+          ${ctaLabel}
+        </a>
+      </div>
+    `;
+  }
+
+  return `
+  <div style="
+    background-color:#4c256c;
+    padding:24px 0;
+    font-family:${baseFontStack};
+  ">
+    <div style="
+      max-width:600px;
+      margin:0 auto;
+      background-color:#4f365e;
+      border-radius:16px;
+      box-shadow:0 4px 16px rgba(0,0,0,0.25);
+      overflow:hidden;
+      border:2px solid #b42ea0;
+    ">
+      <!-- Header -->
+      <div style="
+        background: radial-gradient(circle at top, #3b2035 0, #000000 55%);
+        padding:20px 16px;
+        text-align:center;
+      ">
+        <img
+          src="${logoUrl}"
+          alt="Sugar Plum Creations"
+          style="
+            width:72px;
+            height:72px;
+            border-radius:50%;
+            display:block;
+            margin:0 auto 10px;
+            border:3px solid #ffffff;
+          "
+        />
+        <h1 style="
+          margin:0;
+          font-size:24px;
+          color:#ffffff;
+          font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,Arial,sans-serif;
+          letter-spacing:0.03em;
+          font-weight:600;
+        ">
+          ${safeTitle}
+        </h1>
+      </div>
+
+      <!-- Body -->
+      <div style="padding:20px 24px 24px 24px;">
+        <p style="
+          margin:0 0 12px;
+          font-size:15px;
+          color:#fff5ff;
+          font-family:${baseFontStack};
+        ">
+          ${safeIntro}
+        </p>
+        ${linesHtml}
+        ${trackingHtml}
+        ${ctaHtml}
+      </div>
+
+      <!-- Footer -->
+      <div style="
+        padding:12px 24px;
+        border-top:1px solid rgba(255,255,255,0.15);
+        background-color:#5a3f6c;
+        font-size:12px;
+        color:#f4ddff;
+        text-align:center;
+      ">
+        <p style="
+          margin:0 0 4px;
+          font-family:${baseFontStack};
+        ">
+          ${footer}
+        </p>
+        <p style="
+          margin:0;
+          color:#e4c8ff;
+          font-size:11px;
+          font-family:${baseFontStack};
+        ">
+          Sugar Plum Creations • shopsugarplum.co
+        </p>
+      </div>
+    </div>
+  </div>
+  `;
+}
+
+// Pretty-print order lines for internal emails
+function formatOrderForEmail(order) {
+  let itemsBlock = "";
+
+  try {
+    const raw = order.items_json || order.cart_json || order.itemsJson;
+    if (raw) {
+      const items = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (Array.isArray(items)) {
+        itemsBlock =
+          "\n\nItems:\n" +
+          items
+            .map((it) => {
+              const bits = [];
+              if (it.name) bits.push(it.name);
+              if (it.type) bits.push(it.type);
+              if (it.color) bits.push(it.color);
+              if (it.size) bits.push(it.size);
+              if (it.printSide) bits.push(it.printSide);
+              const lineHead = bits.join(" • ") || "Item";
+              const qty = it.quantity || it.qty || 1;
+              const price = it.price ? (it.price / 100).toFixed(2) : "";
+              return `- ${lineHead}  x${qty}${
+                price ? ` @ $${price}` : ""
+              }`;
+            })
+            .join("\n");
+      }
+    }
+  } catch (e) {
+    console.warn("Could not parse order items JSON for email:", e);
+  }
+
+  if (!itemsBlock) {
+    itemsBlock =
+      "\n\nRaw order JSON:\n" + JSON.stringify(order, null, 2);
+  }
+
+  return itemsBlock;
+}
+
+// Send internal "new order" email (when status becomes PAID)
+async function sendNewOrderAlert(order) {
+  if (!EMAIL_OWNER) return;
+
+  const subject = `New order #${order.id || ""} – ${order.status || "Paid"}`;
+  const text =
+    `You have a new order.\n\n` +
+    `Customer: ${order.customer_name || ""}\n` +
+    `Email: ${order.customer_email || ""}\n` +
+    `Status: ${order.status || ""}\n` +
+    (order.total_amount
+      ? `Total: $${(order.total_amount / 100).toFixed(2)}\n`
+      : "") +
+    formatOrderForEmail(order);
+
+  await sendEmail({
+    to: EMAIL_OWNER,
+    subject,
+    text,
+  });
+}
+
+// Customer emails for status changes (HTML, branded)
+async function sendCustomerStatusEmail(order, newStatus) {
+  const to = order.customer_email;
+  if (!to) return;
+
+  const status = newStatus.toUpperCase();
+  let subject = "";
+  let html = "";
+  let bcc = undefined;
+
+  const trackingNumber = order.tracking_number || "";
+  const trackingUrl = buildTrackingUrl(trackingNumber);
+
+  const total = order.total_amount
+    ? `$${(order.total_amount / 100).toFixed(2)}`
+    : null;
+
+  let items = [];
+  try {
+    const parsed = JSON.parse(order.items_json || "[]");
+    items = parsed.map(
+      (i) => `${i.quantity} × ${i.name} — $${(i.price / 100).toFixed(2)}`
+    );
+  } catch (e) {
+    console.error("Failed to parse items_json:", e);
+  }
+
+  if (status === "PAID") {
+    subject = "Sugar Plum Creations – Order Confirmation";
+
+    html = buildBrandedEmail({
+      title: "Order Confirmation",
+      intro: `Thank you for your order, ${
+        order.customer_name || "friend"
+      }! 🎉`,
+      lines: [
+        ...(total ? [`Order Total: ${total}`] : []),
+        `Order ID: ${order.id}`,
+        "",
+        ...items,
+        "",
+        "We’ll notify you again when your order ships.",
+      ],
+      footerNote: "Thank you for supporting our small business!",
+    });
+
+    // BCC you on confirmation
+    bcc = EMAIL_OWNER;
+  } else if (status === "SHIPPED") {
+    subject = "Your Sugar Plum Creations Order Has Shipped";
+
+    html = buildBrandedEmail({
+      title: "Order Shipped",
+      intro: `Good news! Your Sugar Plum Creations order is on the way. 📦`,
+      lines: [
+        ...(total ? [`Order Total: ${total}`] : []),
+        `Order ID: ${order.id}`,
+      ],
+      trackingNumber: trackingNumber || null,
+      trackingUrl: trackingUrl || null,
+      footerNote: "We appreciate your support!",
+    });
+  } else {
+    return;
+  }
+
+  await sendEmail({
+    to,
+    subject,
+    html,
+    bcc,
+  });
+}
+
+// Central helper to fire emails on status change
+async function handleOrderStatusEmails(order, oldStatus, newStatus) {
+  const previous = (oldStatus || "").toUpperCase();
+  const next = (newStatus || "").toUpperCase();
+
+  if (previous === next) return;
+
+  if (next === "PAID") {
+    await sendCustomerStatusEmail(order, "PAID");
+    await sendNewOrderAlert(order);
+  }
+
+  if (next === "SHIPPED") {
+    await sendCustomerStatusEmail(order, "SHIPPED");
+  }
+}
 
 // ===== Admin Config Storage =====
 const ADMIN_CONFIG_PATH = path.join(__dirname, "adminConfig.json");
@@ -109,25 +515,6 @@ function saveProductConfig() {
   }
 }
 
-// ---------- Email helper ----------
-function createMailTransport() {
-  const host = process.env.SMTP_HOST;
-  if (!host) return null;
-
-  return nodemailer.createTransport({
-    host,
-    port: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587,
-    secure: process.env.SMTP_SECURE === "true",
-    auth:
-      process.env.SMTP_USER && process.env.SMTP_PASS
-        ? {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-          }
-        : undefined,
-  });
-}
-
 // Load configs once when server starts
 loadAdminConfig();
 loadProductConfig();
@@ -147,7 +534,6 @@ if (process.env.NODE_ENV === "production") {
 // ===== Middleware =====
 
 // CORS: allow localhost for dev + shopsugarplum.co for production.
-// You can add your Render static-site URL here later if needed.
 const corsOptions = {
   origin: (origin, callback) => {
     // Allow non-browser requests (no origin)
@@ -277,29 +663,84 @@ function inferType(rawName) {
   return "T-Shirts"; // default for now
 }
 
-// ---------- Parse variation name into size + color ----------
+// ---------- Parse variation name into size + color (IMPROVED) ----------
 function parseVariationName(vName) {
   if (!vName) return { size: null, color: null };
 
-  const parts = vName.split(/[,/]/).map((p) => p.trim());
+  const original = vName;
+  const parts = vName
+    .split(/[,/]/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  // Normalized list of size "tokens" we care about
+  const SIZE_TOKENS = [
+    "nb",
+    "0-3m",
+    "3-6m",
+    "6-9m",
+    "6-12m",
+    "12m",
+    "18m",
+    "24m",
+    "2t",
+    "3t",
+    "4t",
+    "5t",
+    "ys",
+    "ym",
+    "yl",
+    "yxl",
+    "xs",
+    "s",
+    "m",
+    "l",
+    "xl",
+    "xxl",
+    "xxxl",
+    "xxxxl",
+    "2x",
+    "2xl",
+    "3x",
+    "3xl",
+    "4x",
+    "4xl",
+    "5x",
+    "5xl",
+  ];
+
+  function looksLikeSize(partLower) {
+    const normalized = partLower.replace(/\s+/g, "");
+
+    // S / M / L / XL / 2X style
+    if (SIZE_TOKENS.includes(normalized)) return true;
+
+    // Words like "small", "medium", "large"
+    if (
+      normalized === "small" ||
+      normalized === "medium" ||
+      normalized === "large"
+    ) {
+      return true;
+    }
+
+    // Youth / toddler / 2T etc.
+    if (
+      normalized.includes("youth") ||
+      normalized.includes("toddler") ||
+      /^\d+t$/.test(normalized)
+    ) {
+      return true;
+    }
+
+    return false;
+  }
 
   let size = null;
   let color = null;
 
   parts.forEach((part) => {
     const lower = part.toLowerCase();
-
-    const isSize =
-      lower.includes("small") ||
-      lower.includes("medium") ||
-      lower.includes("large") ||
-      lower.includes("xl") ||
-      lower.includes("youth") ||
-      lower.includes("toddler") ||
-      lower.includes("4t") ||
-      lower.includes("3t") ||
-      lower.includes("2t") ||
-      /^\d+t$/.test(lower);
 
     const isGarmentWord =
       lower.includes("shirt") ||
@@ -309,12 +750,40 @@ function parseVariationName(vName) {
       lower.includes("hoodie") ||
       lower.includes("sweatshirt");
 
-    if (isSize) {
+    if (looksLikeSize(lower)) {
       if (!size) size = part;
     } else if (!isGarmentWord && !color) {
       color = part;
     }
   });
+
+  // Special handling for names like "Hot Pink Youth X-Small"
+  if (!size) {
+    const lowerFull = original.toLowerCase();
+
+    if (
+      lowerFull.includes("youth x-small") ||
+      lowerFull.includes("youth x small")
+    ) {
+      size = "Youth X-Small";
+
+      const youthIndex = lowerFull.indexOf("youth");
+      if (youthIndex > 0 && !color) {
+        const colorRaw = original.slice(0, youthIndex).trim();
+        if (colorRaw) {
+          color = colorRaw;
+        }
+      }
+    }
+  }
+
+  // Normalize "Small/Medium/Large" to S/M/L so they line up
+  if (size) {
+    const sLower = size.toLowerCase().trim();
+    if (sLower === "small") size = "S";
+    else if (sLower === "medium") size = "M";
+    else if (sLower === "large") size = "L";
+  }
 
   return { size, color };
 }
@@ -600,15 +1069,34 @@ function normalizeFlags(rawFlags = {}) {
   };
 }
 
-// ---------- Shared loader for apparel products + inventory ----------
-async function loadApparelProductsWithInventory() {
+//
+// ===== CATALOG & INVENTORY CACHING (MASTER LIST) =====
+//
+// Catalog is slow-changing (names, images, etc.)
+// Inventory is fast-changing (quantities)
+const CATALOG_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const INVENTORY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// cachedCatalog: apparel items with variations (size/color/price) but NO quantities
+let cachedCatalog = null;
+let lastCatalogFetch = 0;
+
+// cachedBaseProducts: same as catalog but with quantity on each variation
+let cachedBaseProducts = null;
+let lastInventoryFetch = 0;
+
+// ===== Custom Attribute keys (for variations) =====
+// Change this string if your Square custom attribute key is different.
+const PRINT_LOCATION_CA_KEY = "print_location";
+
+// ----- Refresh catalog from Square (slow but rare) -----
+async function refreshCatalogFromSquare() {
+  console.log("Refreshing catalog from Square (full catalog fetch)...");
   const catalogApi = squareClient.catalogApi;
-  const inventoryApi = squareClient.inventoryApi;
 
   let cursor = undefined;
   const allObjects = [];
 
-  // Pull ALL catalog pages
   do {
     const resp = await catalogApi.listCatalog(cursor);
     if (resp.result.objects) {
@@ -623,9 +1111,7 @@ async function loadApparelProductsWithInventory() {
   console.log("Total ITEM objects:", items.length);
 
   const apparelItems = [];
-  const allVariationIds = [];
 
-  // First pass: figure out which items are apparel & collect variation IDs
   for (const item of items) {
     const data = item.itemData || {};
     const rawName = data.name || "";
@@ -648,59 +1134,22 @@ async function loadApparelProductsWithInventory() {
       (p) => (p.color || "").toLowerCase() === "regular"
     );
 
+    // Skip generic "T-Shirt" template items
     if (
       rawName === "T-Shirt" &&
       !data.imageUrl &&
       allSizesNull &&
       allColorsRegular
     ) {
-      // skip generic template
       continue;
     }
 
     apparelItems.push(item);
-
-    for (const v of data.variations) {
-      if (v.id) {
-        allVariationIds.push(v.id);
-      }
-    }
   }
 
   console.log("Total apparel ITEMs:", apparelItems.length);
-  console.log(
-    "Total variation IDs for inventory lookup:",
-    allVariationIds.length
-  );
 
-  // Second pass: inventory counts
-  const quantityByVariationId = {};
-
-  if (allVariationIds.length > 0) {
-    try {
-      const invResp = await inventoryApi.batchRetrieveInventoryCounts({
-        catalogObjectIds: allVariationIds,
-      });
-
-      const counts = invResp.result.counts || [];
-      console.log("Inventory counts returned:", counts.length);
-
-      for (const c of counts) {
-        const varId = c.catalogObjectId;
-        const q = c.quantity ? Number(c.quantity) : 0;
-
-        if (!quantityByVariationId[varId]) {
-          quantityByVariationId[varId] = 0;
-        }
-        quantityByVariationId[varId] += isNaN(q) ? 0 : q;
-      }
-    } catch (invErr) {
-      console.error("Error retrieving inventory counts:", invErr);
-    }
-  }
-
-  // Third pass: build final product list
-  const finalProducts = [];
+  const normalizedCatalog = [];
 
   for (const item of apparelItems) {
     const data = item.itemData || {};
@@ -736,7 +1185,7 @@ async function loadApparelProductsWithInventory() {
     );
     const subcategory = inferSubcategory(rawName, data.description);
 
-    const variations = data.variations.map((v) => {
+    const variations = (data.variations || []).map((v) => {
       const vData = v.itemVariationData || {};
       const { size, color } = parseVariationName(vData.name || "");
 
@@ -745,7 +1194,15 @@ async function loadApparelProductsWithInventory() {
         price = Number(vData.priceMoney.amount) / 100;
       }
 
-      const quantity = quantityByVariationId[v.id] ?? 0;
+      // NEW: read custom attribute for print location (if defined)
+      const ca = v.customAttributeValues || {};
+      let printLocation = null;
+      if (
+        ca[PRINT_LOCATION_CA_KEY] &&
+        typeof ca[PRINT_LOCATION_CA_KEY].stringValue === "string"
+      ) {
+        printLocation = ca[PRINT_LOCATION_CA_KEY].stringValue.trim();
+      }
 
       return {
         id: v.id,
@@ -753,11 +1210,12 @@ async function loadApparelProductsWithInventory() {
         price,
         size,
         color,
-        quantity,
+        printLocation, // <-- new field (may be null for now)
+        // quantity will be filled in by inventory refresh
       };
     });
 
-    finalProducts.push({
+    normalizedCatalog.push({
       id: item.id,
       name: rawName,
       description: data.description || "",
@@ -769,18 +1227,138 @@ async function loadApparelProductsWithInventory() {
     });
   }
 
-  return finalProducts;
+  cachedCatalog = normalizedCatalog;
+  cachedBaseProducts = null; // force inventory rebuild
+  lastCatalogFetch = Date.now();
+  lastInventoryFetch = 0;
+
+  console.log(
+    `Catalog refresh complete. Apparel items in catalog: ${cachedCatalog.length}`
+  );
+}
+
+// ----- Refresh inventory only (fast; uses cached catalog) -----
+async function refreshInventoryForCatalog() {
+  const inventoryApi = squareClient.inventoryApi;
+
+  if (!cachedCatalog || cachedCatalog.length === 0) {
+    console.log(
+      "Inventory refresh requested but catalog is empty; refreshing catalog first..."
+    );
+    await refreshCatalogFromSquare();
+  }
+
+  const allVariationIds = [];
+  cachedCatalog.forEach((item) => {
+    (item.variations || []).forEach((v) => {
+      if (v.id) allVariationIds.push(v.id);
+    });
+  });
+
+  console.log(
+    "Refreshing inventory for variation IDs count:",
+    allVariationIds.length
+  );
+
+  const quantityByVariationId = {};
+
+  if (allVariationIds.length > 0) {
+    try {
+      const invResp = await inventoryApi.batchRetrieveInventoryCounts({
+        catalogObjectIds: allVariationIds,
+      });
+
+      const counts = invResp.result.counts || [];
+      console.log("Inventory counts returned:", counts.length);
+
+      for (const c of counts) {
+        const varId = c.catalogObjectId;
+        const q = c.quantity ? Number(c.quantity) : 0;
+
+        if (!quantityByVariationId[varId]) {
+          quantityByVariationId[varId] = 0;
+        }
+        quantityByVariationId[varId] += isNaN(q) ? 0 : q;
+      }
+    } catch (invErr) {
+      console.error("Error retrieving inventory counts:", invErr);
+    }
+  }
+
+  const newBaseProducts = cachedCatalog.map((item) => {
+    const variationsWithQty = (item.variations || []).map((v) => {
+      const quantity = quantityByVariationId[v.id] ?? 0;
+      return {
+        ...v,
+        quantity,
+      };
+    });
+
+    return {
+      ...item,
+      variations: variationsWithQty,
+    };
+  });
+
+  cachedBaseProducts = newBaseProducts;
+  lastInventoryFetch = Date.now();
+
+  console.log(
+    `Inventory refresh complete at ${new Date(
+      lastInventoryFetch
+    ).toISOString()}`
+  );
+}
+
+// ----- Ensure catalog is reasonably fresh -----
+async function ensureCatalogFresh() {
+  const now = Date.now();
+
+  if (!cachedCatalog || cachedCatalog.length === 0) {
+    await refreshCatalogFromSquare();
+    return;
+  }
+
+  if (now - lastCatalogFetch > CATALOG_TTL_MS) {
+    console.log("Catalog TTL expired; refreshing catalog from Square...");
+    await refreshCatalogFromSquare();
+  }
+}
+
+// ----- Ensure we have at least one inventory snapshot -----
+async function ensureInventoryInitialized() {
+  if (!cachedBaseProducts) {
+    console.log("No cached inventory; doing initial inventory fetch...");
+    await refreshInventoryForCatalog();
+  }
 }
 
 //
 // ============== PRODUCTS ENDPOINT ==============
-// Includes real-time inventory per variation + product flags + sorting
+// Uses cached master list (catalog + inventory) + product flags + sorting
 //
 app.get("/products", async (req, res) => {
-  console.log("HIT /products"); // debug
-
+  console.log("HIT /products");
   try {
-    const baseProducts = await loadApparelProductsWithInventory();
+    // 1) Make sure catalog exists / is fresh-ish (rare)
+    await ensureCatalogFresh();
+
+    // 2) Make sure we have *some* inventory snapshot
+    await ensureInventoryInitialized();
+
+    // 3) If inventory snapshot is older than INVENTORY_TTL_MS,
+    //    kick off a background refresh (but still respond immediately)
+    const now = Date.now();
+    if (now - lastInventoryFetch > INVENTORY_TTL_MS) {
+      console.log(
+        "Inventory TTL expired; kicking off background inventory refresh..."
+      );
+      refreshInventoryForCatalog().catch((err) =>
+        console.error("Background inventory refresh failed:", err)
+      );
+    }
+
+    const baseProducts = cachedBaseProducts || [];
 
     // Attach flags from productConfig
     let decorated = baseProducts.map((p) => {
@@ -791,6 +1369,11 @@ app.get("/products", async (req, res) => {
 
     // Hide from online shop if flagged
     decorated = decorated.filter((p) => !p.flags.hideOnline);
+
+    // NEW: hide items that are completely out of stock (all variations qty <= 0)
+    decorated = decorated.filter((p) =>
+      (p.variations || []).some((v) => (v.quantity || 0) > 0)
+    );
 
     // Sort: pinToTop → featured → new → name A–Z
     decorated.sort((a, b) => {
@@ -808,13 +1391,14 @@ app.get("/products", async (req, res) => {
 
     res.json(decorated);
   } catch (error) {
-    console.error("Square API error:", error);
+    console.error("Square / caching error in /products:", error);
     res.status(500).json({ error: "Error loading products from Square" });
   }
 });
 
 //
 // ============== DEBUG CATALOG ENDPOINT ==============
+// (Still talks directly to Square; dev / debug use only)
 //
 app.get("/debug-catalog", async (req, res) => {
   try {
@@ -859,10 +1443,23 @@ app.get("/debug-catalog", async (req, res) => {
 });
 
 //
+// ===== HELPER FOR CHECKOUT NOTES (DESIGN LOCATION / PRINT SIDE) =====
+//
+function buildLineItemNote(item) {
+  const bits = [];
+
+  if (item.type && item.type !== "Other") bits.push(item.type);
+  if (item.color) bits.push(item.color);
+  if (item.size) bits.push(item.size);
+  if (item.printSide) bits.push(`Print: ${item.printSide}`);
+
+  return bits.join(" • ");
+}
+
+//
 // ============== CHECKOUT ENDPOINT ==============
 // Uses adminConfig.shippingFlatRate + adminConfig.freeShippingThreshold
 // to add a "Shipping" line item to the Square Payment Link.
-// Shippo is then used later INSIDE Square to buy the label.
 //
 app.post("/checkout", async (req, res) => {
   try {
@@ -882,24 +1479,38 @@ app.post("/checkout", async (req, res) => {
         .json({ error: "Server misconfigured (no location id)." });
     }
 
-    // Build line items from cart (no shipping yet)
+    // Build line items from cart (no shipping / fees yet)
     const lineItems = cart.map((item) => {
       const qty = item.quantity || item.qty || 1;
       const priceCents = item.price || 0; // price already in cents from frontend
 
-      const optionText = [item.color, item.size].filter(Boolean).join(" / ");
+      // Keep current name style with color/size in parentheses
+      const optionParts = [item.color, item.size].filter(Boolean);
+      const baseName = item.name || "Item";
+      const displayName =
+        optionParts.length > 0
+          ? `${baseName} (${optionParts.join(" / ")})`
+          : baseName;
 
-      return {
-        name: optionText ? `${item.name} (${optionText})` : item.name,
+      const lineItem = {
+        name: displayName,
         quantity: String(qty),
         basePriceMoney: {
           amount: priceCents,
           currency: "USD",
         },
       };
+
+      // Include design location / print side + details in the line item note
+      const note = buildLineItemNote(item);
+      if (note) {
+        lineItem.note = note;
+      }
+
+      return lineItem;
     });
 
-    // Subtotal in cents (no shipping yet)
+    // Subtotal in cents (no shipping, no fee yet)
     const subtotalCents = lineItems.reduce(
       (sum, li) =>
         sum +
@@ -938,8 +1549,57 @@ app.post("/checkout", async (req, res) => {
       });
     }
 
-    const totalCents = subtotalCents + shippingCents;
-    console.log("Grand total (cents) including shipping:", totalCents);
+    // ----- 3% Convenience / Card Processing Fee -----
+    // Apply 3% on (items + shipping). Change this if you only want it on items.
+    const FEE_PERCENT = 0.03;
+    const feeBaseCents = subtotalCents + shippingCents;
+    const convenienceFeeCents = Math.round(feeBaseCents * FEE_PERCENT);
+
+    if (convenienceFeeCents > 0) {
+      lineItems.push({
+        name: "Convenience Fee (3%)",
+        quantity: "1",
+        basePriceMoney: {
+          amount: convenienceFeeCents,
+          currency: "USD",
+        },
+      });
+    }
+
+    // ----- 7% Sales Tax (MS only, on items + shipping, NOT the 3% fee) -----
+    let salesTaxCents = 0;
+
+    // Normalize shipping state from the customer form
+    const shippingState = (customer?.state || "")
+      .toString()
+      .trim()
+      .toUpperCase();
+
+    if (shippingState === "MS") {
+      const SALES_TAX_RATE = 0.07;
+      // Tax base = items + shipping (no fee)
+      const taxBaseCents = subtotalCents + shippingCents;
+      salesTaxCents = Math.round(taxBaseCents * SALES_TAX_RATE);
+    }
+
+    if (salesTaxCents > 0) {
+      lineItems.push({
+        name: "Sales Tax (7%)",
+        quantity: "1",
+        basePriceMoney: {
+          amount: salesTaxCents,
+          currency: "USD",
+        },
+      });
+    }
+
+    const totalCents =
+      subtotalCents + shippingCents + convenienceFeeCents + salesTaxCents;
+
+    console.log(
+      "Grand total (cents) including shipping + fee + tax:",
+      totalCents
+    );
 
     const checkoutApi = squareClient.checkoutApi;
     const idempotencyKey = crypto.randomUUID();
@@ -970,7 +1630,7 @@ app.post("/checkout", async (req, res) => {
 
     const now = new Date().toISOString();
 
-    // Bundle shipping info in a simple object (for DB / admin use)
+    // Bundle shipping + fee + tax info in a simple object (for DB / admin use)
     const shippingInfo = {
       name: customer?.name || null,
       email: customer?.email || null,
@@ -982,6 +1642,8 @@ app.post("/checkout", async (req, res) => {
       zip: customer?.zip || null,
       subtotalCents,
       shippingCents,
+      convenienceFeeCents,
+      salesTaxCents,
       totalCents,
     };
 
@@ -1009,7 +1671,7 @@ app.post("/checkout", async (req, res) => {
       customer?.email || null,
       "PENDING",
       null,
-      JSON.stringify(cart), // cart items only
+      JSON.stringify(cart), // cart items only (includes printSide)
       totalCents,
       "USD",
       now,
@@ -1017,23 +1679,27 @@ app.post("/checkout", async (req, res) => {
       JSON.stringify(shippingInfo)
     );
 
-    // ----- Order confirmation email -----
-    const transporter = createMailTransport();
-    if (transporter && customer?.email) {
+    // ----- Order email with payment link -----
+    if (customer?.email) {
       try {
-        await transporter.sendMail({
-          from: process.env.SMTP_FROM || customer.email,
+        const emailHtml = buildBrandedEmail({
+          title: "Order Created",
+          intro: `Hi ${customer.name || "there"}, your order has been created and is ready for payment.`,
+          lines: [
+            `Order total: $${(totalCents / 100).toFixed(2)}${
+              shippingCents === 0 ? " (includes FREE shipping)" : ""
+            }`,
+          ],
+          ctaLabel: "Complete Payment",
+          ctaUrl: paymentLink.url,
+          footerNote: "Thank you for supporting our small business!",
+        });
+
+        await sendEmail({
           to: customer.email,
           subject: "We received your order – Sugar Plum Creations",
-          html: `
-            <p>Hi ${customer.name || "there"},</p>
-            <p>Thank you for your order! Your payment link is ready:</p>
-            <p><a href="${paymentLink.url}">${paymentLink.url}</a></p>
-            <p>Order total: $${(totalCents / 100).toFixed(2)}${
-              shippingCents === 0 ? " (includes FREE shipping)" : ""
-            }</p>
-            <p>If you have any questions, just reply to this email.</p>
-          `,
+          html: emailHtml,
+          bcc: EMAIL_OWNER || undefined,
         });
       } catch (mailErr) {
         console.error("Failed to send order confirmation email:", mailErr);
@@ -1047,10 +1713,109 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
-// ===== Simple Admin Auth =====
-// In dev: allow everything.
-// In production on Render: require a logged-in admin session.
+// ===== DEBUG: test email endpoint =====
+app.get("/debug/email-test", async (req, res) => {
+  try {
+    const to = process.env.EMAIL_OWNER || process.env.EMAIL_FROM;
 
+    if (!to) {
+      return res
+        .status(500)
+        .json({ error: "EMAIL_OWNER or EMAIL_FROM not set" });
+    }
+
+    const testHtml = `
+      <p><strong>Brevo SMTP Test</strong></p>
+      <p>This email confirms your Brevo SMTP is working for Sugar Plum Creations.</p>
+    `;
+
+    if (!mailTransporter) {
+      return res
+        .status(500)
+        .json({ error: "Mail transporter not configured" });
+    }
+
+    await mailTransporter.sendMail({
+      from: process.env.EMAIL_FROM,
+      to,
+      subject: "Sugar Plum – Brevo SMTP Test",
+      html: testHtml,
+    });
+
+    res.json({ ok: true, to });
+  } catch (err) {
+    console.error("Email test error:", err);
+    res.status(500).json({
+      error: "Failed to send test email",
+      details: err.message,
+    });
+  }
+});
+
+// ===== DEBUG: sample customer email (PAID / SHIPPED) =====
+app.get("/debug/email-sample", async (req, res) => {
+  try {
+    if (!mailTransporter) {
+      return res
+        .status(500)
+        .json({ error: "Mail transporter not configured" });
+    }
+
+    // ?type=paid or ?type=shipped (default = paid)
+    const typeRaw = (req.query.type || "paid").toString().toUpperCase();
+    const type = typeRaw === "SHIPPED" ? "SHIPPED" : "PAID";
+
+    // you can override recipient with ?to=some@email
+    const to = req.query.to || EMAIL_OWNER || EMAIL_FROM;
+
+    if (!to) {
+      return res.status(500).json({
+        error:
+          "No recipient email found. Set EMAIL_OWNER or EMAIL_FROM, or pass ?to= email.",
+      });
+    }
+
+    // Fake order for preview
+    const fakeOrder = {
+      id: 1234,
+      customer_name: "Sample Customer",
+      customer_email: to,
+      status: type,
+      total_amount: 5600, // $56.00 in cents
+      tracking_number:
+        type === "SHIPPED" ? "9400 1000 0000 0000 0000 00" : "",
+      items_json: JSON.stringify([
+        {
+          name: "Ducks Bucks & Trucks Tee",
+          quantity: 1,
+          price: 2600, // $26.00
+        },
+        {
+          name: "Merry & Bright Hoodie",
+          quantity: 1,
+          price: 3000, // $30.00
+        },
+      ]),
+    };
+
+    await sendCustomerStatusEmail(fakeOrder, type);
+
+    res.json({
+      ok: true,
+      to,
+      sampleType: type,
+      message: `Sample ${type} email sent to ${to}`,
+    });
+  } catch (err) {
+    console.error("Email sample error:", err);
+    res.status(500).json({
+      error: "Failed to send sample email",
+      details: err.message,
+    });
+  }
+});
+
+// ===== Simple Admin Auth =====
 function requireAdmin(req, res, next) {
   if (process.env.NODE_ENV !== "production") {
     // Dev mode: skip auth locally
@@ -1138,8 +1903,167 @@ app.put("/admin/config", requireAdmin, (req, res) => {
 });
 
 //
+// ===== Admin: Products & Sync (uses cached master list) =====
+//
+
+// Admin: trigger full catalog + inventory sync now
+app.post("/admin/sync/catalog", requireAdmin, async (req, res) => {
+  try {
+    await refreshCatalogFromSquare();
+    await refreshInventoryForCatalog();
+
+    const itemCount = cachedCatalog ? cachedCatalog.length : 0;
+    let variationCount = 0;
+    if (cachedCatalog) {
+      cachedCatalog.forEach((p) => {
+        variationCount += (p.variations || []).length;
+      });
+    }
+
+    res.json({
+      ok: true,
+      message: "Catalog + inventory sync completed.",
+      catalogItems: itemCount,
+      variationCount,
+      lastCatalogFetch,
+      lastInventoryFetch,
+    });
+  } catch (err) {
+    console.error("Error in /admin/sync/catalog:", err);
+    res.status(500).json({ error: "Failed to sync catalog." });
+  }
+});
+
+// Admin: trigger inventory-only sync now
+app.post("/admin/sync/inventory", requireAdmin, async (req, res) => {
+  try {
+    await refreshInventoryForCatalog();
+
+    let variationCount = 0;
+    if (cachedBaseProducts) {
+      cachedBaseProducts.forEach((p) => {
+        variationCount += (p.variations || []).length;
+      });
+    }
+
+    res.json({
+      ok: true,
+      message: "Inventory sync completed.",
+      lastInventoryFetch,
+      variationCount,
+    });
+  } catch (err) {
+    console.error("Error in /admin/sync/inventory:", err);
+    res.status(500).json({ error: "Failed to sync inventory." });
+  }
+});
+
+// Admin: products list + flags (for inventory/feature UI)
+app.get("/admin/products", requireAdmin, async (req, res) => {
+  try {
+    await ensureCatalogFresh();
+    await ensureInventoryInitialized();
+
+    const baseProducts = cachedBaseProducts || [];
+
+    const products = baseProducts.map((p) => {
+      const flags = normalizeFlags(productConfig[p.id] || {});
+      const totalInventory = (p.variations || []).reduce(
+        (sum, v) => sum + (v.quantity || 0),
+        0
+      );
+      return {
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        subcategory: p.subcategory || null,
+        totalInventory,
+        flags,
+      };
+    });
+
+    // Sort by name alphabetically
+    products.sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({
+      products,
+      lastCatalogFetch,
+      lastInventoryFetch,
+    });
+  } catch (err) {
+    console.error("Error in /admin/products:", err);
+    res.status(500).json({ error: "Failed to load admin products." });
+  }
+});
+
+// Admin: update product flags (isNew, isFeatured, pinToTop, hides, ribbon)
+app.put("/admin/products", requireAdmin, (req, res) => {
+  const body = req.body || {};
+  const updates = Array.isArray(body.products) ? body.products : null;
+
+  if (!updates) {
+    return res
+      .status(400)
+      .json({ error: "Request body must include products array." });
+  }
+
+  updates.forEach((u) => {
+    if (!u || !u.id) return;
+
+    const existing = productConfig[u.id] || {};
+    const incomingFlags = u.flags || {};
+
+    const merged = normalizeFlags({
+      ...existing,
+      ...incomingFlags,
+    });
+
+    productConfig[u.id] = merged;
+  });
+
+  saveProductConfig();
+
+  res.json({ ok: true, productConfig });
+});
+
+//
 // ===== Admin: Orders from local DB (NOT from Square) =====
 //
+
+// Helper: accept either local numeric id, square_order_id, or square_payment_link_id
+function resolveOrderId(rawId) {
+  if (!rawId) return null;
+  const trimmed = String(rawId).trim();
+  if (!trimmed) return null;
+
+  // If it's a positive integer, use it directly
+  const asNumber = Number(trimmed);
+  if (!Number.isNaN(asNumber) && asNumber > 0) {
+    return asNumber;
+  }
+
+  // Otherwise, try to resolve via Square IDs
+  try {
+    const lookup = db
+      .prepare(
+        `
+        SELECT id
+        FROM orders
+        WHERE square_order_id = ?
+           OR square_payment_link_id = ?
+      `
+      )
+      .get(trimmed, trimmed);
+
+    if (lookup && lookup.id) {
+      return lookup.id;
+    }
+  } catch (err) {
+    console.error("Error resolving order id from Square IDs:", err);
+  }
+
+  return null;
+}
 
 // List recent orders (for admin dashboard)
 app.get("/admin/orders", requireAdmin, (req, res) => {
@@ -1158,6 +2082,7 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
         created_at,
         updated_at
       FROM orders
+      WHERE status != 'ARCHIVED'
       ORDER BY created_at DESC
       LIMIT 50
     `);
@@ -1191,11 +2116,100 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
   }
 });
 
+// =========================
+// ARCHIVE DOWNLOAD ROUTE
+// MUST be placed BEFORE /admin/orders/:id
+// =========================
+app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
+  try {
+    const stmt = db.prepare(`
+      SELECT
+        id,
+        square_order_id,
+        square_payment_link_id,
+        customer_name,
+        customer_email,
+        status,
+        tracking_number,
+        items_json,
+        shipping_json,
+        total_money,
+        currency,
+        created_at,
+        updated_at
+      FROM orders
+      WHERE status = 'ARCHIVED'
+      ORDER BY created_at ASC
+    `);
+
+    const rows = stmt.all();
+
+    if (!rows || rows.length === 0) {
+      return res.status(200).json({
+        ok: true,
+        message: "No archived orders to download.",
+      });
+    }
+
+    if (!fs.existsSync(EXPORTS_DIR)) {
+      fs.mkdirSync(EXPORTS_DIR, { recursive: true });
+    }
+
+    const now = new Date();
+    const stamp = now.toISOString().split("T")[0];
+    const zipName = `orders-archive-${stamp}.zip`;
+    const zipPath = path.join(EXPORTS_DIR, zipName);
+
+    await new Promise((resolve, reject) => {
+      const output = fs.createWriteStream(zipPath);
+      const archive = archiver("zip", { zlib: { level: 9 } });
+
+      output.on("close", resolve);
+      archive.on("error", reject);
+
+      archive.pipe(output);
+      archive.append(JSON.stringify(rows, null, 2), { name: "orders.json" });
+      archive.finalize();
+    });
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${zipName}"`
+    );
+
+    const readStream = fs.createReadStream(zipPath);
+
+    readStream.on("close", () => {
+      try {
+        fs.unlinkSync(zipPath);
+      } catch (e) {
+        console.error("Failed to delete temp zip:", e);
+      }
+
+      try {
+        db.prepare(`DELETE FROM orders WHERE status = 'ARCHIVED'`).run();
+      } catch (dbErr) {
+        console.error("Failed to delete archived orders:", dbErr);
+      }
+    });
+
+    readStream.pipe(res);
+  } catch (err) {
+    console.error("Error generating archived orders download:", err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "Failed to generate archived orders download.",
+      });
+    }
+  }
+});
+
 // Get full details for a single order
 app.get("/admin/orders/:id", requireAdmin, (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!id || Number.isNaN(id)) {
+    const id = resolveOrderId(req.params.id);
+    if (!id) {
       return res.status(400).json({ error: "Invalid order id." });
     }
 
@@ -1263,15 +2277,235 @@ app.get("/admin/orders/:id", requireAdmin, (req, res) => {
   }
 });
 
-// Update order status + tracking, optionally email customer
+
+// ===== PACKING LIST PDF (Admin-only) =====
+app.get("/admin/orders/:id/packing-slip", requireAdmin, (req, res) => {
+  try {
+    if (!PDFDocument) {
+      return res
+        .status(500)
+        .send("PDF generation is not available (pdfkit not installed).");
+    }
+
+    const id = resolveOrderId(req.params.id);
+    if (!id) {
+      return res.status(400).send("Invalid order id.");
+    }
+
+    const stmt = db.prepare(`
+      SELECT
+        id,
+        customer_name,
+        customer_email,
+        status,
+        tracking_number,
+        items_json,
+        shipping_json,
+        total_money,
+        currency,
+        created_at
+      FROM orders
+      WHERE id = ?
+    `);
+
+    const row = stmt.get(id);
+    if (!row) {
+      return res.status(404).send("Order not found.");
+    }
+
+    let items = [];
+    let shipping = null;
+
+    try {
+      if (row.items_json) items = JSON.parse(row.items_json);
+    } catch (e) {
+      console.error("Failed to parse items_json for packing list", id, e);
+    }
+
+    try {
+      if (row.shipping_json) shipping = JSON.parse(row.shipping_json);
+    } catch (e) {
+      console.error("Failed to parse shipping_json for packing list", id, e);
+    }
+
+    // ---- Format date in Central Time ----
+    let createdLocalStr = row.created_at || "";
+    if (row.created_at) {
+      try {
+        const d = new Date(row.created_at);
+        createdLocalStr = d.toLocaleString("en-US", {
+          timeZone: "America/Chicago",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      } catch (e) {
+        console.error("Failed to format created_at for packing slip", e);
+      }
+    }
+
+    // Prepare PDF response
+    const safeOrderId = String(row.id).replace(/[^a-zA-Z0-9_-]/g, "");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename=packing-list-${safeOrderId}.pdf`
+    );
+    res.setHeader("Content-Type", "application/pdf");
+
+    const doc = new PDFDocument({ margin: 40 });
+    doc.pipe(res);
+
+    // Header
+    doc
+      .fontSize(18)
+      .text("Sugar Plum Creations", { align: "center" })
+      .moveDown(0.3);
+
+    doc
+      .fontSize(14)
+      .text("Packing List", { align: "center" })
+      .moveDown(1);
+
+    // Order summary
+    const total =
+      row.total_money != null ? (Number(row.total_money) / 100).toFixed(2) : "";
+    const customerName = row.customer_name || "";
+    const customerEmail = row.customer_email || "";
+
+    doc.fontSize(10);
+    doc.text(`Order #: ${row.id}`);
+    doc.text(`Date (Central Time): ${createdLocalStr}`);
+    if (total) {
+      doc.text(`Order Total: $${total}`);
+    }
+    if (row.status) {
+      doc.text(`Status: ${row.status}`);
+    }
+    doc.moveDown(0.5);
+
+    // Shipping block
+    const shipName =
+      (shipping && (shipping.name || shipping.customerName)) || customerName;
+    const shipEmail =
+      (shipping && (shipping.email || shipping.customerEmail)) ||
+      customerEmail;
+    const addressLines = [];
+    if (
+      shipping &&
+      (shipping.address1 ||
+        shipping.address2 ||
+        shipping.city ||
+        shipping.state ||
+        shipping.zip)
+    ) {
+      if (shipping.address1) addressLines.push(shipping.address1);
+      if (shipping.address2) addressLines.push(shipping.address2);
+      const cityStateZip = [
+        shipping.city || "",
+        shipping.state || "",
+        shipping.zip || "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      if (cityStateZip) addressLines.push(cityStateZip);
+    }
+
+    doc.text("Ship To:", { underline: true });
+    if (shipName) doc.text(shipName);
+    if (shipEmail) doc.text(shipEmail);
+    addressLines.forEach((line) => doc.text(line));
+    doc.moveDown(0.5);
+
+    // Items header
+    doc
+      .fontSize(11)
+      .text("Items", { underline: true })
+      .moveDown(0.3);
+
+    const tableTop = doc.y;
+    const col1X = 40; // Item
+    const col2X = 260; // Color
+    const col3X = 360; // Size
+    const col4X = 430; // Qty
+
+    doc.fontSize(10);
+    doc.text("Item", col1X, tableTop);
+    doc.text("Color", col2X, tableTop);
+    doc.text("Size", col3X, tableTop);
+    doc.text("Qty", col4X, tableTop);
+
+    // Header divider
+    doc
+      .moveTo(col1X, tableTop + 12)
+      .lineTo(550, tableTop + 12)
+      .stroke();
+
+    let y = tableTop + 18;
+
+    // Items rows
+    (items || []).forEach((item) => {
+      const name = item.name || "Item";
+      const color = item.color || "";
+      const size = item.size || "";
+      const qty = item.quantity || item.qty || 1;
+
+      doc.text(name, col1X, y, { width: 200 });
+      doc.text(color, col2X, y, { width: 80 });
+      doc.text(size, col3X, y, { width: 60 });
+      doc.text(String(qty), col4X, y, { width: 30 });
+
+      y += 16;
+
+      // Simple page break
+      if (y > doc.page.height - 80) {
+        doc.addPage();
+        y = 40;
+      }
+    });
+
+    // Centered footer notes so they don't run off the page
+    doc.moveDown(2);
+    const margin = 40;
+    const footerStartY = doc.y;
+    const availableWidth = doc.page.width - margin * 2;
+
+    doc
+      .fontSize(9)
+      .text(
+        "This packing list is for internal use only. Prices are intentionally omitted.",
+        margin,
+        footerStartY,
+        { align: "center", width: availableWidth }
+      )
+      .moveDown(0.5);
+
+    doc.text(
+      "Thank you for supporting our small business!",
+      margin,
+      doc.y,
+      { align: "center", width: availableWidth }
+    );
+
+    doc.end();
+  } catch (err) {
+    console.error("Error generating packing list PDF:", err);
+    if (!res.headersSent) {
+      res.status(500).send("Failed to generate packing list.");
+    }
+  }
+});
+
+// Update order status + tracking, and fire status-based emails
 app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!id || Number.isNaN(id)) {
+    const id = resolveOrderId(req.params.id);
+    if (!id) {
       return res.status(400).json({ error: "Invalid order id." });
     }
 
-    const { status, trackingNumber, notifyCustomer } = req.body || {};
+    const { status, trackingNumber } = req.body || {};
 
     const select = db.prepare(`
       SELECT
@@ -1282,6 +2516,7 @@ app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
         tracking_number AS old_tracking,
         total_money,
         currency,
+        items_json,
         shipping_json
       FROM orders
       WHERE id = ?
@@ -1308,35 +2543,24 @@ app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
 
     update.run(newStatus, newTracking, now, id);
 
-    // Optionally notify customer
-    if (notifyCustomer && row.customer_email) {
-      const transporter = createMailTransport();
-      if (transporter) {
-        try {
-          let subject = "Order update – Sugar Plum Creations";
-          let bodyText = `Hi ${row.customer_name || "there"},\n\n`;
-          let bodyHtml = `<p>Hi ${row.customer_name || "there"},</p>`;
+    // Build an order object shaped for our email helpers
+    const orderForEmail = {
+      id: row.id,
+      customer_name: row.customer_name,
+      customer_email: row.customer_email,
+      status: newStatus,
+      total_amount: row.total_money, // cents
+      items_json: row.items_json,
+      tracking_number: newTracking,
+    };
 
-          if (newStatus.toUpperCase() === "SHIPPED" && newTracking) {
-            subject = "Your order has shipped – Sugar Plum Creations";
-            bodyText += `Your order has been shipped.\nTracking number: ${newTracking}\n\nThank you for shopping with us!`;
-            bodyHtml += `<p>Your order has been shipped.</p><p><strong>Tracking number:</strong> ${newTracking}</p><p>Thank you for shopping with us!</p>`;
-          } else {
-            bodyText += `Your order status is now: ${newStatus}.\n\nThank you!`;
-            bodyHtml += `<p>Your order status is now: <strong>${newStatus}</strong>.</p><p>Thank you!</p>`;
-          }
-
-          await transporter.sendMail({
-            from: process.env.SMTP_FROM || row.customer_email,
-            to: row.customer_email,
-            subject,
-            text: bodyText,
-            html: bodyHtml,
-          });
-        } catch (mailErr) {
-          console.error("Failed to send order update email:", mailErr);
-        }
-      }
+    try {
+      // This will:
+      // - send customer confirmation + internal alert when status becomes PAID
+      // - send customer shipping email when status becomes SHIPPED
+      await handleOrderStatusEmails(orderForEmail, row.old_status, newStatus);
+    } catch (e) {
+      console.error("Error sending status emails:", e);
     }
 
     return res.json({
@@ -1352,108 +2576,55 @@ app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// Admin: products list + flags (for inventory/feature UI)
-app.get("/admin/products", requireAdmin, async (req, res) => {
+// Download and clear archived orders (protected)
+// Returns a ZIP containing a single orders.json file.
+// After a successful download, all ARCHIVED orders are removed from the DB.
+app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
   try {
-    const baseProducts = await loadApparelProductsWithInventory();
-    const products = baseProducts.map((p) => {
-      const flags = normalizeFlags(productConfig[p.id] || {});
-      const totalInventory = (p.variations || []).reduce(
-        (sum, v) => sum + (v.quantity || 0),
-        0
-      );
-      return {
-        id: p.id,
-        name: p.name,
-        type: p.type,
-        subcategory: p.subcategory || null,
-        totalInventory,
-        flags,
-      };
-    });
+    const stmt = db.prepare(`
+      SELECT
+        id,
+        square_order_id,
+        square_payment_link_id,
+        customer_name,
+        customer_email,
+        status,
+        tracking_number,
+        items_json,
+        shipping_json,
+        total_money,
+        currency,
+        created_at,
+        updated_at
+      FROM orders
+      WHERE status = 'ARCHIVED'
+      ORDER BY created_at ASC
+    `);
 
-    // Sort by name alphabetically
-    products.sort((a, b) => a.name.localeCompare(b.name));
+    const rows = stmt.all();
 
-    res.json({ products });
-  } catch (err) {
-    console.error("Error in /admin/products:", err);
-    res.status(500).json({ error: "Failed to load admin products." });
-  }
-});
-
-// Admin: update product flags (isNew, isFeatured, pinToTop, hides, ribbon)
-app.put("/admin/products", requireAdmin, (req, res) => {
-  const body = req.body || {};
-  const updates = Array.isArray(body.products) ? body.products : null;
-
-  if (!updates) {
-    return res
-      .status(400)
-      .json({ error: "Request body must include products array." });
-  }
-
-  updates.forEach((u) => {
-    if (!u || !u.id) return;
-
-    const existing = productConfig[u.id] || {};
-    const incomingFlags = u.flags || {};
-
-    const merged = normalizeFlags({
-      ...existing,
-      ...incomingFlags,
-    });
-
-    productConfig[u.id] = merged;
-  });
-
-  saveProductConfig();
-
-  res.json({ ok: true, productConfig });
-});
-
-// Create and email a monthly archive of receipts/invoices (protected)
-app.post("/admin/monthly-archive", requireAdmin, async (req, res) => {
-  try {
-    if (!fs.existsSync(EXPORTS_DIR)) {
-      console.warn("EXPORTS_DIR does not exist, returning no files.");
-      return res.json({
+    if (rows == null || rows.length === 0) {
+      return res.status(200).json({
         ok: true,
-        message: "No exports directory found yet; nothing to archive.",
+        message: "No archived orders to download.",
       });
+    }
+
+    // Make sure exports dir exists
+    if (!fs.existsSync(EXPORTS_DIR)) {
+      fs.mkdirSync(EXPORTS_DIR, { recursive: true });
     }
 
     const now = new Date();
     const year = now.getFullYear();
-    const monthIndex = now.getMonth();
-    const monthLabel = String(monthIndex + 1).padStart(2, "0");
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const stamp = `${year}-${month}-${day}`;
 
-    const allNames = fs.readdirSync(EXPORTS_DIR);
-    const filesToArchive = [];
-
-    for (const name of allNames) {
-      const fullPath = path.join(EXPORTS_DIR, name);
-      const stat = fs.statSync(fullPath);
-
-      if (!stat.isFile()) continue;
-      if (name.toLowerCase().endsWith(".zip")) continue;
-
-      const mtime = stat.mtime;
-      if (mtime.getFullYear() === year && mtime.getMonth() === monthIndex) {
-        filesToArchive.push({ name, path: fullPath });
-      }
-    }
-
-    if (filesToArchive.length === 0) {
-      return res.json({
-        ok: true,
-        message: "No files found for the current month to archive.",
-      });
-    }
-
-    const zipName = `receipts-${year}-${monthLabel}.zip`;
+    const zipName = `orders-archive-${stamp}.zip`;
     const zipPath = path.join(EXPORTS_DIR, zipName);
 
+    // Create the zip file with a single JSON file inside
     await new Promise((resolve, reject) => {
       const output = fs.createWriteStream(zipPath);
       const archive = archiver("zip", { zlib: { level: 9 } });
@@ -1463,59 +2634,89 @@ app.post("/admin/monthly-archive", requireAdmin, async (req, res) => {
 
       archive.pipe(output);
 
-      filesToArchive.forEach((file) => {
-        archive.file(file.path, { name: file.name });
-      });
+      const jsonContent = JSON.stringify(rows, null, 2);
+      archive.append(jsonContent, { name: "orders.json" });
 
       archive.finalize();
     });
 
-    let msg = `Archive created: ${zipName}`;
+    // Send the zip as a download, then clean up
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${zipName}"`
+    );
 
-    const smtpHost = process.env.SMTP_HOST;
-    const archiveTo = process.env.ARCHIVE_EMAIL_TO;
+    const readStream = fs.createReadStream(zipPath);
 
-    if (smtpHost && archiveTo) {
-      const transporter = createMailTransport();
-
-      if (transporter) {
-        await transporter.sendMail({
-          from: process.env.SMTP_FROM || archiveTo,
-          to: archiveTo,
-          subject: `Monthly Receipts Archive - ${year}-${monthLabel}`,
-          text: "Attached is the monthly receipts archive from your website.",
-          attachments: [
-            {
-              filename: zipName,
-              path: zipPath,
-            },
-          ],
-        });
-
-        msg += " and emailed.";
-      } else {
-        msg += ". (Email transport not configured correctly.)";
-      }
-    } else {
-      msg += ". (Email not configured; archive stored on server only.)";
-    }
-
-    for (const file of filesToArchive) {
+    readStream.on("close", () => {
+      // Delete the temp zip file
       try {
-        fs.unlinkSync(file.path);
+        fs.unlinkSync(zipPath);
       } catch (e) {
-        console.error("Failed to delete original file:", file.path, e);
+        console.error("Failed to delete temp orders archive zip:", e);
       }
-    }
 
-    return res.json({ ok: true, message: msg });
+      // Remove archived orders from DB
+      try {
+        const deleteStmt = db.prepare(
+          `DELETE FROM orders WHERE status = 'ARCHIVED'`
+        );
+        deleteStmt.run();
+        console.log("Archived orders deleted from DB after download.");
+      } catch (dbErr) {
+        console.error("Failed to delete archived orders from DB:", dbErr);
+      }
+    });
+
+    readStream.pipe(res);
   } catch (err) {
-    console.error("Error generating monthly archive:", err);
-    return res
-      .status(500)
-      .json({ error: "Failed to create monthly archive." });
+    console.error("Error generating archived orders download:", err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "Failed to generate archived orders download.",
+      });
+    }
   }
 });
+
+// ===== BACKGROUND AUTO-REFRESH LOOPS =====
+
+// Run an initial soft warmup after server start (doesn't crash if Square fails)
+(async () => {
+  try {
+    console.log("Initial warmup: ensuring catalog + inventory...");
+    await ensureCatalogFresh();
+    await ensureInventoryInitialized();
+    console.log("Initial warmup complete.");
+  } catch (err) {
+    console.error(
+      "Initial warmup failed (will retry later via requests):",
+      err
+    );
+  }
+})();
+
+// Every 5 minutes: refresh inventory snapshot so counts stay fresh
+setInterval(async () => {
+  try {
+    console.log("Background inventory refresh (5 min interval)...");
+    await refreshInventoryForCatalog();
+  } catch (err) {
+    console.error("Background inventory refresh failed:", err);
+  }
+}, INVENTORY_TTL_MS); // INVENTORY_TTL_MS is already 5 minutes
+
+// Every 24 hours: refresh full catalog + inventory
+setInterval(async () => {
+  try {
+    console.log("Background catalog refresh (24h interval)...");
+    await refreshCatalogFromSquare();
+    await refreshInventoryForCatalog();
+  } catch (err) {
+    console.error("Background catalog refresh failed:", err);
+  }
+}, CATALOG_TTL_MS); // CATALOG_TTL_MS is already 24 hours
 
 // Start server
 app.listen(PORT, () => {
