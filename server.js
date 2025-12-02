@@ -48,7 +48,10 @@ const {
   EMAIL_OWNER,
 } = process.env;
 
+const FROM_EMAIL = EMAIL_FROM || SMTP_USER;
+
 let mailTransporter = null;
+
 
 if (SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && EMAIL_FROM) {
   mailTransporter = nodemailer.createTransport({
@@ -73,12 +76,13 @@ async function sendEmail({ to, subject, text, html, bcc }) {
   }
 
   const message = {
-    from: EMAIL_FROM,
+    from: `"Sugar Plum Creations" <${FROM_EMAIL}>`,
     to,
     subject,
     text: text || "",
     html: html || text || "",
   };
+
 
   if (bcc) {
     message.bcc = bcc;
@@ -1735,12 +1739,13 @@ app.get("/debug/email-test", async (req, res) => {
         .json({ error: "Mail transporter not configured" });
     }
 
-    await mailTransporter.sendMail({
-      from: process.env.EMAIL_FROM,
+        await mailTransporter.sendMail({
+      from: `"Sugar Plum Creations" <${FROM_EMAIL}>`,
       to,
       subject: "Sugar Plum – Brevo SMTP Test",
       html: testHtml,
     });
+
 
     res.json({ ok: true, to });
   } catch (err) {
