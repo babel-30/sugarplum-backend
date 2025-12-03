@@ -1374,6 +1374,32 @@ app.get("/products", async (req, res) => {
     // Hide from online shop if flagged
     decorated = decorated.filter((p) => !p.flags.hideOnline);
 
+    // NEW: normalize variations for frontend
+    // - Ensure each variation has:
+    //   - priceCents (integer, in cents)
+    //   - catalogObjectId (Square variation id)
+    decorated = decorated.map((p) => {
+      const normalizedVariations = (p.variations || []).map((v) => {
+        const priceNumber =
+          typeof v.price === "number" && !Number.isNaN(v.price)
+            ? v.price
+            : 0;
+
+        return {
+          ...v,
+          // Square variation id is already v.id in our catalog
+          catalogObjectId: v.id,
+          // Convert dollars -> cents so frontend can use it directly
+          priceCents: Math.round(priceNumber * 100),
+        };
+      });
+
+      return {
+        ...p,
+        variations: normalizedVariations,
+      };
+    });
+
     // NEW: hide items that are completely out of stock (all variations qty <= 0)
     decorated = decorated.filter((p) =>
       (p.variations || []).some((v) => (v.quantity || 0) > 0)
@@ -1399,6 +1425,7 @@ app.get("/products", async (req, res) => {
     res.status(500).json({ error: "Error loading products from Square" });
   }
 });
+
 
 //
 // ============== DEBUG CATALOG ENDPOINT ==============
@@ -1459,11 +1486,101 @@ function buildLineItemNote(item) {
 
   return bits.join(" • ");
 }
+// ===== SERVER-SIDE INVENTORY HELPERS (for final checkout guard) =====
 
-//
+// Safely pull quantity from a backend variation object
+function extractQtyFromServerVariation(v) {
+  if (!v) return null;
+
+  const fields = [
+    "availableQty",
+    "available_quantity",
+    "inventory",
+    "quantity",
+    "stock",
+    "qty",
+    "onHand",
+    "on_hand",
+    "quantityOnHand",
+    "quantity_on_hand",
+  ];
+
+  for (const field of fields) {
+    if (v[field] !== undefined && v[field] !== null) {
+      const n = Number(v[field]);
+      if (!Number.isNaN(n)) {
+        return n;
+      }
+    }
+  }
+  return null;
+}
+
+// Given a cart item + baseProducts, return how many we believe are available
+function getServerAvailableQtyForCartItem(cartItem, baseProducts) {
+  if (!cartItem || !Array.isArray(baseProducts)) return 0;
+
+  const productId = cartItem.id || cartItem.productId;
+  if (!productId) return 0;
+
+  const product =
+    baseProducts.find(
+      (p) => p.id === productId || p.squareItemId === productId
+    ) || null;
+
+  if (!product) return 0;
+
+  // Prefer variation-level inventory if we can match a variation
+  if (Array.isArray(product.variations) && product.variations.length > 0) {
+    const varId = cartItem.squareVariationId || cartItem.catalogObjectId || null;
+
+    let variation = null;
+
+    // 1) Try matching by variation ID / catalogObjectId
+    if (varId) {
+      variation =
+        product.variations.find(
+          (v) =>
+            v.id === varId ||
+            v.catalogObjectId === varId ||
+            v.squareCatalogObjectId === varId
+        ) || null;
+    }
+
+    // 2) Fallback: match by color + size
+    if (!variation) {
+      const colorLower = (cartItem.color || "").toLowerCase();
+      const sizeLower = (cartItem.size || "").toLowerCase();
+
+      variation =
+        product.variations.find((v) => {
+          const vColor = (v.color || "").toLowerCase();
+          const vSize = (v.size || "").toLowerCase();
+          return vColor === colorLower && vSize === sizeLower;
+        }) || null;
+    }
+
+    if (variation) {
+      const q = extractQtyFromServerVariation(variation);
+      if (typeof q === "number") {
+        return q;
+      }
+    }
+  }
+
+  // Fall back to product-level inventory if present
+  if (typeof product.inventory === "number") {
+    return product.inventory;
+  }
+
+  // Unknown → treat as 0 for conservative guard
+  return 0;
+}
+
 // ============== CHECKOUT ENDPOINT ==============
 // Uses adminConfig.shippingFlatRate + adminConfig.freeShippingThreshold
 // to add a "Shipping" line item to the Square Payment Link.
+// Also performs a final inventory check to prevent overselling.
 //
 app.post("/checkout", async (req, res) => {
   try {
@@ -1483,7 +1600,64 @@ app.post("/checkout", async (req, res) => {
         .json({ error: "Server misconfigured (no location id)." });
     }
 
-    // Build line items from cart (no shipping / fees yet)
+    // ----- FINAL INVENTORY CHECK (server-side guard) -----
+    try {
+      console.log("Checkout: performing final inventory validation...");
+
+      // Make sure catalog + inventory snapshot are fresh
+      await ensureCatalogFresh();
+      await ensureInventoryInitialized();
+      await refreshInventoryForCatalog();
+
+      const baseProducts = cachedBaseProducts || [];
+      const conflicts = [];
+
+      for (const item of cart) {
+        const requestedQty =
+          Number(item.quantity || item.qty || 1) > 0
+            ? Number(item.quantity || item.qty || 1)
+            : 1;
+
+        const availableQty = getServerAvailableQtyForCartItem(
+          item,
+          baseProducts
+        );
+
+        if (availableQty <= 0 || requestedQty > availableQty) {
+          conflicts.push({
+            productId: item.id || null,
+            name: item.name || "Item",
+            color: item.color || null,
+            size: item.size || null,
+            requestedQty,
+            availableQty: Math.max(availableQty, 0),
+          });
+        }
+      }
+
+      if (conflicts.length > 0) {
+        console.warn(
+          "Checkout blocked due to out-of-stock conflicts:",
+          conflicts
+        );
+        return res.status(409).json({
+          error:
+            "Some items in your cart are no longer available in the requested quantity.",
+          type: "OUT_OF_STOCK",
+          conflicts,
+        });
+      }
+
+      console.log("Checkout: inventory validation passed.");
+    } catch (invErr) {
+      console.error("Inventory validation during checkout failed:", invErr);
+      return res.status(500).json({
+        error:
+          "We had trouble validating stock for your cart. Please refresh the page and try again.",
+      });
+    }
+
+    // ----- Build Square line items (items only; no shipping/fees/tax yet) -----
     const lineItems = cart.map((item) => {
       const qty = item.quantity || item.qty || 1;
       const priceCents = item.price || 0; // price already in cents from frontend
@@ -1554,7 +1728,7 @@ app.post("/checkout", async (req, res) => {
     }
 
     // ----- 3% Convenience / Card Processing Fee -----
-    // Apply 3% on (items + shipping). Change this if you only want it on items.
+    // Apply 3% on (items + shipping).
     const FEE_PERCENT = 0.03;
     const feeBaseCents = subtotalCents + shippingCents;
     const convenienceFeeCents = Math.round(feeBaseCents * FEE_PERCENT);
@@ -1683,19 +1857,23 @@ app.post("/checkout", async (req, res) => {
       JSON.stringify(shippingInfo)
     );
 
-    // ----- Order email with payment link -----
+    // ----- Order email with payment link REMOVED -----
+    // This email just confirms we got the order; payment is handled on Square.
     if (customer?.email) {
       try {
+        const introLine = `Hi ${
+          customer.name || "there"
+        }, your order has been created. An order confirmation email will follow after the payment has been verified on Square. Thank you for your purchase!`;
+
         const emailHtml = buildBrandedEmail({
           title: "Order Created",
-          intro: `Hi ${customer.name || "there"}, your order has been created and is ready for payment.`,
+          intro: introLine,
           lines: [
             `Order total: $${(totalCents / 100).toFixed(2)}${
               shippingCents === 0 ? " (includes FREE shipping)" : ""
             }`,
           ],
-          ctaLabel: "Complete Payment",
-          ctaUrl: paymentLink.url,
+          // NOTE: no ctaLabel / ctaUrl here anymore, so there is no payment button
           footerNote: "Thank you for supporting our small business!",
         });
 
@@ -1716,6 +1894,40 @@ app.post("/checkout", async (req, res) => {
     res.status(500).json({ error: "Failed to start checkout" });
   }
 });
+
+// ===== ADMIN: REFRESH INVENTORY (THANK-YOU PING) =====
+// Called by thank-you.html after a successful Square checkout.
+// Safely refreshes catalog + inventory snapshot so the shop reflects
+// the latest stock as soon as possible.
+app.post("/admin/refresh-inventory", async (req, res) => {
+  try {
+    console.log("[/admin/refresh-inventory] Thank-you page ping received.");
+
+    // Make sure our catalog + inventory caches are fresh
+    await ensureCatalogFresh();
+    await ensureInventoryInitialized();
+    await refreshInventoryForCatalog();
+
+    const now = new Date().toISOString();
+    console.log(
+      "[/admin/refresh-inventory] Inventory refresh completed at",
+      now
+    );
+
+    return res.json({ ok: true, refreshedAt: now });
+  } catch (err) {
+    console.error(
+      "[/admin/refresh-inventory] Failed to refresh inventory:",
+      err
+    );
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to refresh inventory snapshot.",
+    });
+  }
+});
+
+
 
 // ===== DEBUG: test email endpoint =====
 app.get("/debug/email-test", async (req, res) => {
@@ -1739,13 +1951,12 @@ app.get("/debug/email-test", async (req, res) => {
         .json({ error: "Mail transporter not configured" });
     }
 
-        await mailTransporter.sendMail({
+    await mailTransporter.sendMail({
       from: `"Sugar Plum Creations" <${FROM_EMAIL}>`,
       to,
       subject: "Sugar Plum – Brevo SMTP Test",
       html: testHtml,
     });
-
 
     res.json({ ok: true, to });
   } catch (err) {
@@ -1860,6 +2071,7 @@ app.get("/admin/me", (req, res) => {
   }
   return res.status(401).json({ error: "Not authorized" });
 });
+
 
 // ===== Admin Routes =====
 
@@ -2685,7 +2897,40 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
   }
 });
 
+// ===== INVENTORY / CATALOG DEBUG STATUS =====
+app.get("/debug/inventory-status", (req, res) => {
+  const now = Date.now();
+
+  const minutesSinceInventory =
+    lastInventoryFetch > 0
+      ? ((now - lastInventoryFetch) / 60000).toFixed(1)
+      : null;
+
+  const minutesSinceCatalog =
+    lastCatalogFetch > 0
+      ? ((now - lastCatalogFetch) / 60000).toFixed(1)
+      : null;
+
+  res.json({
+    nodeEnv: process.env.NODE_ENV || null,
+    squareEnvironment: process.env.SQUARE_ENVIRONMENT || null,
+    lastInventoryFetch,
+    lastCatalogFetch,
+    minutesSinceInventory: minutesSinceInventory,
+    minutesSinceCatalog: minutesSinceCatalog,
+    inventoryTtlMs: INVENTORY_TTL_MS,
+    catalogTtlMs: CATALOG_TTL_MS,
+  });
+});
+
 // ===== BACKGROUND AUTO-REFRESH LOOPS =====
+
+// Log that we are setting up background loops (helpful on Render)
+console.log("Setting up background auto-refresh loops...", {
+  NODE_ENV: process.env.NODE_ENV,
+  INVENTORY_TTL_MS,
+  CATALOG_TTL_MS,
+});
 
 // Run an initial soft warmup after server start (doesn't crash if Square fails)
 (async () => {
@@ -2693,7 +2938,12 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
     console.log("Initial warmup: ensuring catalog + inventory...");
     await ensureCatalogFresh();
     await ensureInventoryInitialized();
-    console.log("Initial warmup complete.");
+    console.log(
+      "Initial warmup complete. lastCatalogFetch =",
+      lastCatalogFetch,
+      "lastInventoryFetch =",
+      lastInventoryFetch
+    );
   } catch (err) {
     console.error(
       "Initial warmup failed (will retry later via requests):",
@@ -2705,8 +2955,14 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
 // Every 5 minutes: refresh inventory snapshot so counts stay fresh
 setInterval(async () => {
   try {
-    console.log("Background inventory refresh (5 min interval)...");
+    console.log(
+      `[${new Date().toISOString()}] Background inventory refresh (5 min interval)...`
+    );
     await refreshInventoryForCatalog();
+    console.log(
+      "Background inventory refresh complete. lastInventoryFetch =",
+      lastInventoryFetch
+    );
   } catch (err) {
     console.error("Background inventory refresh failed:", err);
   }
@@ -2715,9 +2971,17 @@ setInterval(async () => {
 // Every 24 hours: refresh full catalog + inventory
 setInterval(async () => {
   try {
-    console.log("Background catalog refresh (24h interval)...");
+    console.log(
+      `[${new Date().toISOString()}] Background catalog refresh (24h interval)...`
+    );
     await refreshCatalogFromSquare();
     await refreshInventoryForCatalog();
+    console.log(
+      "Background catalog refresh complete. lastCatalogFetch =",
+      lastCatalogFetch,
+      "lastInventoryFetch =",
+      lastInventoryFetch
+    );
   } catch (err) {
     console.error("Background catalog refresh failed:", err);
   }
