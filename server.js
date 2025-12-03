@@ -1606,6 +1606,10 @@ function getServerAvailableQtyForCartItem(cartItem, baseProducts) {
 // to add a "Shipping" line item to the Square Payment Link.
 // Also performs a final inventory check to prevent overselling.
 //
+// NOTE: For now we are NOT tying line items to catalogObjectId
+// and NOT adding a SHIPMENT fulfillment, because those were
+// causing Square's checkout to fail at pay time.
+//
 app.post("/checkout", async (req, res) => {
   try {
     const { cart, customer } = req.body;
@@ -1681,8 +1685,8 @@ app.post("/checkout", async (req, res) => {
       });
     }
 
-    // ----- Build Square line items (items only; no shipping/fees/tax yet) -----
-    const lineItems = cart.map((item) => {
+    // ----- Build Square line items (NO catalogObjectId for now) -----
+    const productLineItems = cart.map((item) => {
       const qty = item.quantity || item.qty || 1;
       const priceCents = item.price || 0; // price already in cents from frontend
 
@@ -1695,8 +1699,8 @@ app.post("/checkout", async (req, res) => {
           : baseName;
 
       const lineItem = {
-        name: displayName,
         quantity: String(qty),
+        name: displayName,
         basePriceMoney: {
           amount: priceCents,
           currency: "USD",
@@ -1712,8 +1716,8 @@ app.post("/checkout", async (req, res) => {
       return lineItem;
     });
 
-    // Subtotal in cents (no shipping, no fee yet)
-    const subtotalCents = lineItems.reduce(
+    // Subtotal in cents for PRODUCTS ONLY (no shipping/fees/tax yet)
+    const subtotalCents = productLineItems.reduce(
       (sum, li) =>
         sum +
         Number(li.basePriceMoney.amount) * Number(li.quantity || "1"),
@@ -1725,8 +1729,10 @@ app.post("/checkout", async (req, res) => {
       return res.status(400).json({ error: "Invalid cart total" });
     }
 
+    // Start with product line items, then append shipping/fee/tax
+    const lineItems = [...productLineItems];
+
     // ----- Shipping calculation (flat rate + free shipping) -----
-    // Values are stored in dollars in adminConfig
     const shippingFlat = Number(adminConfig.shippingFlatRate || 0); // dollars
     const freeThresh =
       adminConfig.freeShippingThreshold != null
@@ -1752,7 +1758,6 @@ app.post("/checkout", async (req, res) => {
     }
 
     // ----- 3% Convenience / Card Processing Fee -----
-    // Apply 3% on (items + shipping).
     const FEE_PERCENT = 0.03;
     const feeBaseCents = subtotalCents + shippingCents;
     const convenienceFeeCents = Math.round(feeBaseCents * FEE_PERCENT);
@@ -1771,7 +1776,6 @@ app.post("/checkout", async (req, res) => {
     // ----- 7% Sales Tax (MS only, on items + shipping, NOT the 3% fee) -----
     let salesTaxCents = 0;
 
-    // Normalize shipping state from the customer form
     const shippingState = (customer?.state || "")
       .toString()
       .trim()
@@ -1779,7 +1783,6 @@ app.post("/checkout", async (req, res) => {
 
     if (shippingState === "MS") {
       const SALES_TAX_RATE = 0.07;
-      // Tax base = items + shipping (no fee)
       const taxBaseCents = subtotalCents + shippingCents;
       salesTaxCents = Math.round(taxBaseCents * SALES_TAX_RATE);
     }
@@ -1806,6 +1809,7 @@ app.post("/checkout", async (req, res) => {
     const checkoutApi = squareClient.checkoutApi;
     const idempotencyKey = crypto.randomUUID();
 
+    // NO fulfillments for now; that was causing issues on Square side.
     const checkoutBody = {
       idempotencyKey,
       order: {
@@ -1832,7 +1836,6 @@ app.post("/checkout", async (req, res) => {
 
     const now = new Date().toISOString();
 
-    // Bundle shipping + fee + tax info in a simple object (for DB / admin use)
     const shippingInfo = {
       name: customer?.name || null,
       email: customer?.email || null,
@@ -1873,7 +1876,7 @@ app.post("/checkout", async (req, res) => {
       customer?.email || null,
       "PENDING",
       null,
-      JSON.stringify(cart), // cart items only (includes printSide)
+      JSON.stringify(cart),
       totalCents,
       "USD",
       now,
@@ -1881,8 +1884,7 @@ app.post("/checkout", async (req, res) => {
       JSON.stringify(shippingInfo)
     );
 
-    // ----- Order email with payment link REMOVED -----
-    // This email just confirms we got the order; payment is handled on Square.
+    // Order email (no payment button, payment is via Square)
     if (customer?.email) {
       try {
         const introLine = `Hi ${
@@ -1897,7 +1899,6 @@ app.post("/checkout", async (req, res) => {
               shippingCents === 0 ? " (includes FREE shipping)" : ""
             }`,
           ],
-          // NOTE: no ctaLabel / ctaUrl here anymore, so there is no payment button
           footerNote: "Thank you for supporting our small business!",
         });
 
@@ -1918,6 +1919,7 @@ app.post("/checkout", async (req, res) => {
     res.status(500).json({ error: "Failed to start checkout" });
   }
 });
+
 
 // ===== ADMIN: REFRESH INVENTORY (THANK-YOU PING) =====
 // Called by thank-you.html after a successful Square checkout.
