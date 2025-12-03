@@ -586,27 +586,20 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
-
-// ===== SESSION CONFIG (FIXED FOR MOBILE & SAFARI) =====
+// ===== SESSION CONFIG (CROSS-SITE SAFE, WORKS WITH shopsugarplum.co FRONTEND) =====
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "change-this-secret",
     resave: false,
     saveUninitialized: false,
-
     cookie: {
       httpOnly: true,
-
-      // Required for all cross-site cookies
+      // Needed for cross-site cookies (frontend on shopsugarplum.co,
+      // backend on sugarplum-backend.onrender.com)
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-
-      // REQUIRED when frontend domain != backend domain
-      // This makes cookies valid for both shopsugarplum.co and www.shopsugarplum.co
-      domain: process.env.NODE_ENV === "production" ? ".shopsugarplum.co" : undefined,
-
-      // Ensure cookies last long enough for admin sessions
+      // IMPORTANT: do NOT set "domain" here; let it default
+      // to sugarplum-backend.onrender.com so the cookie is accepted.
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
   })
