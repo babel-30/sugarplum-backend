@@ -1606,9 +1606,10 @@ function getServerAvailableQtyForCartItem(cartItem, baseProducts) {
 // to add a "Shipping" line item to the Square Payment Link.
 // Also performs a final inventory check to prevent overselling.
 //
-// NOTE: For now we are NOT tying line items to catalogObjectId
-// and NOT adding a SHIPMENT fulfillment, because those were
-// causing Square's checkout to fail at pay time.
+// Line items are tied to Square catalog variations via catalogObjectId
+// so inventory is decremented correctly on Square's side. We are NOT
+// manually adding a SHIPMENT fulfillment here; instead we rely on
+// checkoutOptions.askForShippingAddress so Square creates the shipment.
 //
 app.post("/checkout", async (req, res) => {
   try {
@@ -1685,49 +1686,47 @@ app.post("/checkout", async (req, res) => {
       });
     }
 
-// ----- Build Square line items (TIE TO CATALOG VARIATIONS) -----
-const productLineItems = cart.map((item) => {
-  const qty = item.quantity || item.qty || 1;
-  const priceCents = item.price || 0; // price already in cents from frontend
+    // ----- Build Square line items (TIE TO CATALOG VARIATIONS) -----
+    const productLineItems = cart.map((item) => {
+      const qty = item.quantity || item.qty || 1;
+      const priceCents = item.price || 0; // price already in cents from frontend
 
-  // Keep current name style with color/size in parentheses
-  const optionParts = [item.color, item.size].filter(Boolean);
-  const baseName = item.name || "Item";
-  const displayName =
-    optionParts.length > 0
-      ? `${baseName} (${optionParts.join(" / ")})`
-      : baseName;
+      // Keep current name style with color/size in parentheses
+      const optionParts = [item.color, item.size].filter(Boolean);
+      const baseName = item.name || "Item";
+      const displayName =
+        optionParts.length > 0
+          ? `${baseName} (${optionParts.join(" / ")})`
+          : baseName;
 
-  // IMPORTANT: tie back to Square catalog so inventory is decremented.
-  // These fields should already be coming from /products.
-  const catalogObjectId =
-    item.catalogObjectId ||
-    item.squareVariationId ||
-    item.squareCatalogObjectId ||
-    null;
+      // IMPORTANT: tie back to Square catalog so inventory is decremented.
+      const catalogObjectId =
+        item.catalogObjectId ||
+        item.squareVariationId ||
+        item.squareCatalogObjectId ||
+        null;
 
-  const lineItem = {
-    quantity: String(qty),
-    name: displayName,
-    basePriceMoney: {
-      amount: priceCents,
-      currency: "USD",
-    },
-  };
+      const lineItem = {
+        quantity: String(qty),
+        name: displayName,
+        basePriceMoney: {
+          amount: priceCents,
+          currency: "USD",
+        },
+      };
 
-  if (catalogObjectId) {
-    lineItem.catalogObjectId = catalogObjectId;
-  }
+      if (catalogObjectId) {
+        lineItem.catalogObjectId = catalogObjectId;
+      }
 
-  // Include design location / print side + details in the line item note
-  const note = buildLineItemNote(item);
-  if (note) {
-    lineItem.note = note;
-  }
+      // Include design location / print side + details in the line item note
+      const note = buildLineItemNote(item);
+      if (note) {
+        lineItem.note = note;
+      }
 
-  return lineItem;
-});
-
+      return lineItem;
+    });
 
     // Subtotal in cents for PRODUCTS ONLY (no shipping/fees/tax yet)
     const subtotalCents = productLineItems.reduce(
@@ -1822,7 +1821,8 @@ const productLineItems = cart.map((item) => {
     const checkoutApi = squareClient.checkoutApi;
     const idempotencyKey = crypto.randomUUID();
 
-    // NO fulfillments for now; that was causing issues on Square side.
+    // No manual fulfillments; rely on askForShippingAddress so Square
+    // creates a SHIPMENT fulfillment automatically.
     const checkoutBody = {
       idempotencyKey,
       order: {
@@ -1833,7 +1833,20 @@ const productLineItems = cart.map((item) => {
         redirectUrl:
           process.env.CHECKOUT_REDIRECT_URL ||
           "https://shopsugarplum.co/thank-you.html",
+
+        // This causes Square to treat the order as a shipping order
+        askForShippingAddress: true,
+
+        // Pre-fill email & shipping address from the customer's form
         prePopulateBuyerEmail: customer?.email || undefined,
+        shippingAddress: {
+          addressLine1: customer?.address1 || undefined,
+          addressLine2: customer?.address2 || undefined,
+          locality: customer?.city || undefined,
+          administrativeDistrictLevel1: customer?.state || undefined,
+          postalCode: customer?.postalCode || undefined,
+          country: "US",
+        },
       },
     };
 
@@ -1857,7 +1870,7 @@ const productLineItems = cart.map((item) => {
       address2: customer?.address2 || null,
       city: customer?.city || null,
       state: customer?.state || null,
-      zip: customer?.zip || null,
+      zip: customer?.postalCode || null,
       subtotalCents,
       shippingCents,
       convenienceFeeCents,
@@ -1932,6 +1945,7 @@ const productLineItems = cart.map((item) => {
     res.status(500).json({ error: "Failed to start checkout" });
   }
 });
+
 
 
 // ===== ADMIN: REFRESH INVENTORY (THANK-YOU PING) =====
