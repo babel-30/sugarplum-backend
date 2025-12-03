@@ -52,7 +52,6 @@ const FROM_EMAIL = EMAIL_FROM || SMTP_USER;
 
 let mailTransporter = null;
 
-
 if (SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && EMAIL_FROM) {
   mailTransporter = nodemailer.createTransport({
     host: SMTP_HOST,
@@ -82,7 +81,6 @@ async function sendEmail({ to, subject, text, html, bcc }) {
     text: text || "",
     html: html || text || "",
   };
-
 
   if (bcc) {
     message.bcc = bcc;
@@ -586,6 +584,10 @@ app.use((req, res, next) => {
   next();
 });
 
+// *** BODY PARSERS (for JSON form posts like /admin/login, /checkout, etc.) ***
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 // ===== SESSION CONFIG (CROSS-SITE SAFE, WORKS WITH shopsugarplum.co FRONTEND) =====
 app.use(
   session({
@@ -604,7 +606,6 @@ app.use(
     },
   })
 );
-
 
 // ---- Square client ----
 if (!process.env.SQUARE_ACCESS_TOKEN) {
@@ -1450,7 +1451,6 @@ app.get("/products", async (req, res) => {
   }
 });
 
-
 //
 // ============== DEBUG CATALOG ENDPOINT ==============
 // (Still talks directly to Square; dev / debug use only)
@@ -1951,8 +1951,6 @@ app.post("/admin/refresh-inventory", async (req, res) => {
   }
 });
 
-
-
 // ===== DEBUG: test email endpoint =====
 app.get("/debug/email-test", async (req, res) => {
   try {
@@ -2095,7 +2093,6 @@ app.get("/admin/me", (req, res) => {
   }
   return res.status(401).json({ error: "Not authorized" });
 });
-
 
 // ===== Admin Routes =====
 
@@ -2518,7 +2515,6 @@ app.get("/admin/orders/:id", requireAdmin, (req, res) => {
   }
 });
 
-
 // ===== PACKING LIST PDF (Admin-only) =====
 app.get("/admin/orders/:id/packing-slip", requireAdmin, (req, res) => {
   try {
@@ -2869,6 +2865,7 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
     await new Promise((resolve, reject) => {
       const output = fs.createWriteStream(zipPath);
       const archive = archiver("zip", { zlib: { level: 9 } });
+ 
 
       output.on("close", resolve);
       archive.on("error", reject);
