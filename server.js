@@ -1605,9 +1605,6 @@ function getServerAvailableQtyForCartItem(cartItem, baseProducts) {
 // Uses adminConfig.shippingFlatRate + adminConfig.freeShippingThreshold
 // to add a "Shipping" line item to the Square Payment Link.
 // Also performs a final inventory check to prevent overselling.
-// Now also:
-//  - Ties product line items to Square catalog via catalogObjectId
-//  - Adds a SHIPMENT fulfillment so orders show in Square's Shipping view
 //
 app.post("/checkout", async (req, res) => {
   try {
@@ -1684,8 +1681,8 @@ app.post("/checkout", async (req, res) => {
       });
     }
 
-    // ----- Build Square line items tied to catalog (for inventory) -----
-    const productLineItems = cart.map((item) => {
+    // ----- Build Square line items (items only; no shipping/fees/tax yet) -----
+    const lineItems = cart.map((item) => {
       const qty = item.quantity || item.qty || 1;
       const priceCents = item.price || 0; // price already in cents from frontend
 
@@ -1697,25 +1694,14 @@ app.post("/checkout", async (req, res) => {
           ? `${baseName} (${optionParts.join(" / ")})`
           : baseName;
 
-      // IMPORTANT: tie back to Square catalog so inventory is decremented
-      const catalogObjectId =
-        item.catalogObjectId ||
-        item.squareVariationId ||
-        item.squareCatalogObjectId ||
-        null;
-
       const lineItem = {
-        quantity: String(qty),
         name: displayName,
+        quantity: String(qty),
         basePriceMoney: {
           amount: priceCents,
           currency: "USD",
         },
       };
-
-      if (catalogObjectId) {
-        lineItem.catalogObjectId = catalogObjectId;
-      }
 
       // Include design location / print side + details in the line item note
       const note = buildLineItemNote(item);
@@ -1726,8 +1712,8 @@ app.post("/checkout", async (req, res) => {
       return lineItem;
     });
 
-    // Subtotal in cents for PRODUCTS ONLY (no shipping/fees/tax yet)
-    const subtotalCents = productLineItems.reduce(
+    // Subtotal in cents (no shipping, no fee yet)
+    const subtotalCents = lineItems.reduce(
       (sum, li) =>
         sum +
         Number(li.basePriceMoney.amount) * Number(li.quantity || "1"),
@@ -1738,9 +1724,6 @@ app.post("/checkout", async (req, res) => {
     if (subtotalCents <= 0) {
       return res.status(400).json({ error: "Invalid cart total" });
     }
-
-    // Start with product line items, then append shipping/fee/tax
-    const lineItems = [...productLineItems];
 
     // ----- Shipping calculation (flat rate + free shipping) -----
     // Values are stored in dollars in adminConfig
@@ -1823,35 +1806,11 @@ app.post("/checkout", async (req, res) => {
     const checkoutApi = squareClient.checkoutApi;
     const idempotencyKey = crypto.randomUUID();
 
-    // ----- SHIPMENT FULFILLMENT (so orders show in Square "Shipments") -----
-    const fulfillments = [
-      {
-        type: "SHIPMENT",
-        state: "PROPOSED",
-        shipmentDetails: {
-          recipient: {
-            displayName: customer?.name || undefined,
-            emailAddress: customer?.email || undefined,
-            phoneNumber: customer?.phone || undefined,
-            address: {
-              addressLine1: customer?.address1 || undefined,
-              addressLine2: customer?.address2 || undefined,
-              locality: customer?.city || undefined,
-              administrativeDistrictLevel1: customer?.state || undefined,
-              postalCode: customer?.zip || undefined,
-              country: "US",
-            },
-          },
-        },
-      },
-    ];
-
     const checkoutBody = {
       idempotencyKey,
       order: {
         locationId,
         lineItems,
-        fulfillments,
       },
       checkoutOptions: {
         redirectUrl:
@@ -1959,7 +1918,6 @@ app.post("/checkout", async (req, res) => {
     res.status(500).json({ error: "Failed to start checkout" });
   }
 });
-
 
 // ===== ADMIN: REFRESH INVENTORY (THANK-YOU PING) =====
 // Called by thank-you.html after a successful Square checkout.
