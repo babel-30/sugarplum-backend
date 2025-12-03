@@ -1685,36 +1685,49 @@ app.post("/checkout", async (req, res) => {
       });
     }
 
-    // ----- Build Square line items (NO catalogObjectId for now) -----
-    const productLineItems = cart.map((item) => {
-      const qty = item.quantity || item.qty || 1;
-      const priceCents = item.price || 0; // price already in cents from frontend
+// ----- Build Square line items (TIE TO CATALOG VARIATIONS) -----
+const productLineItems = cart.map((item) => {
+  const qty = item.quantity || item.qty || 1;
+  const priceCents = item.price || 0; // price already in cents from frontend
 
-      // Keep current name style with color/size in parentheses
-      const optionParts = [item.color, item.size].filter(Boolean);
-      const baseName = item.name || "Item";
-      const displayName =
-        optionParts.length > 0
-          ? `${baseName} (${optionParts.join(" / ")})`
-          : baseName;
+  // Keep current name style with color/size in parentheses
+  const optionParts = [item.color, item.size].filter(Boolean);
+  const baseName = item.name || "Item";
+  const displayName =
+    optionParts.length > 0
+      ? `${baseName} (${optionParts.join(" / ")})`
+      : baseName;
 
-      const lineItem = {
-        quantity: String(qty),
-        name: displayName,
-        basePriceMoney: {
-          amount: priceCents,
-          currency: "USD",
-        },
-      };
+  // IMPORTANT: tie back to Square catalog so inventory is decremented.
+  // These fields should already be coming from /products.
+  const catalogObjectId =
+    item.catalogObjectId ||
+    item.squareVariationId ||
+    item.squareCatalogObjectId ||
+    null;
 
-      // Include design location / print side + details in the line item note
-      const note = buildLineItemNote(item);
-      if (note) {
-        lineItem.note = note;
-      }
+  const lineItem = {
+    quantity: String(qty),
+    name: displayName,
+    basePriceMoney: {
+      amount: priceCents,
+      currency: "USD",
+    },
+  };
 
-      return lineItem;
-    });
+  if (catalogObjectId) {
+    lineItem.catalogObjectId = catalogObjectId;
+  }
+
+  // Include design location / print side + details in the line item note
+  const note = buildLineItemNote(item);
+  if (note) {
+    lineItem.note = note;
+  }
+
+  return lineItem;
+});
+
 
     // Subtotal in cents for PRODUCTS ONLY (no shipping/fees/tax yet)
     const subtotalCents = productLineItems.reduce(
