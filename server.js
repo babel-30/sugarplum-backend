@@ -552,6 +552,7 @@ const corsOptions = {
       "http://localhost:5500",
       "https://shopsugarplum.co",
       "https://www.shopsugarplum.co",
+      "https://sugarplum-backend.onrender.com", // ✅ allow backend-hosted admin pages
     ];
 
     if (allowed.includes(origin)) {
