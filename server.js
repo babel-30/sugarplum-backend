@@ -538,9 +538,10 @@ if (process.env.NODE_ENV === "production") {
 // ===== Middleware =====
 
 // CORS: allow localhost for dev + shopsugarplum.co for production.
+// Safari + cross-site cookies REQUIRE these headers to be exact.
 const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow non-browser requests (no origin)
+  origin: function (origin, callback) {
+    // Allow requests without Origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
 
     const allowed = [
@@ -554,33 +555,59 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    // In dev, be permissive so you can test from other origins if needed
+    // In development: allow everything
     if (process.env.NODE_ENV !== "production") {
       return callback(null, true);
     }
 
     return callback(new Error("Not allowed by CORS"));
   },
+
+  // REQUIRED FOR SAFARI + cross-site sessions
   credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+  ],
 };
 
+// Apply CORS with credentials support
 app.use(cors(corsOptions));
+
+// Extra headers to satisfy Safari & iOS WebKit
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Credentials", "true");
+  next();
+});
+
 app.use(express.json());
 
-// Session cookies: dev vs production (Render) behavior
+// ===== SESSION CONFIG (FIXED FOR MOBILE & SAFARI) =====
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "change-this-secret",
     resave: false,
     saveUninitialized: false,
+
     cookie: {
       httpOnly: true,
-      // On Render (NODE_ENV=production) we use secure cookies + SameSite=None for cross-site admin use
+
+      // Required for all cross-site cookies
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+
+      // REQUIRED when frontend domain != backend domain
+      // This makes cookies valid for both shopsugarplum.co and www.shopsugarplum.co
+      domain: process.env.NODE_ENV === "production" ? ".shopsugarplum.co" : undefined,
+
+      // Ensure cookies last long enough for admin sessions
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
   })
 );
+
 
 // ---- Square client ----
 if (!process.env.SQUARE_ACCESS_TOKEN) {
