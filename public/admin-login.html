@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Admin Login – Sugar Plum Creations</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles.css" />
+    <!-- Make API_BASE available -->
+    <script src="config.js"></script>
+  </head>
+  <body class="admin">
+    <!-- Shared header -->
+    <header class="header">
+      <div class="header-brand">
+        <img
+          src="spc-logo-round.png"
+          alt="Sugar Plum Creations logo"
+          class="header-logo-img"
+        />
+        <a href="index.html" class="brand-link">
+          <span class="brand-logo-text">Sugar Plum Creations</span>
+        </a>
+      </div>
+
+      <nav class="header-nav">
+        <a href="kiosk.html" class="nav-link">Kiosk</a>
+        <a href="admin-login.html" class="nav-link nav-link-active">Admin</a>
+      </nav>
+    </header>
+
+    <main class="admin-main">
+      <section class="card admin-section">
+        <h2>Admin Login</h2>
+        <p class="admin-help-text">
+          Enter your credentials to access the admin dashboard.
+        </p>
+
+        <form id="login-form" class="admin-form">
+          <label class="admin-label" for="username">Username</label>
+          <input
+            id="username"
+            name="username"
+            type="text"
+            class="admin-input"
+            autocomplete="username"
+            required
+          />
+
+          <label class="admin-label" for="password">Password</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            class="admin-input"
+            autocomplete="current-password"
+            required
+          />
+
+          <button type="submit" class="btn-primary">
+            Log In
+          </button>
+
+          <p id="login-status" class="admin-status"></p>
+        </form>
+      </section>
+    </main>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const form = document.getElementById("login-form");
+        const statusEl = document.getElementById("login-status");
+        const usernameInput = document.getElementById("username");
+        const passwordInput = document.getElementById("password");
+
+        function showStatus(message, isError) {
+          if (!statusEl) return;
+          statusEl.textContent = message || "";
+          statusEl.style.color = isError ? "red" : "black";
+        }
+
+        // If already logged in, skip straight to admin dashboard
+        (async () => {
+          try {
+            const res = await fetch(`${API_BASE}/admin/me`, {
+              credentials: "include",
+            });
+            if (res.ok) {
+              window.location.href = "admin.html";
+            }
+          } catch (err) {
+            console.warn("Admin pre-check failed (ok on local):", err);
+          }
+        })();
+
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          showStatus("Logging in…", false);
+
+          const username = usernameInput.value.trim();
+          const password = passwordInput.value;
+
+          if (!username || !password) {
+            showStatus("Please enter both username and password.", true);
+            return;
+          }
+
+          try {
+            const res = await fetch(`${API_BASE}/admin/login`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              credentials: "include", // important for sessions
+              body: JSON.stringify({ username, password }),
+            });
+
+            const data = await res.json().catch(() => ({}));
+
+            if (!res.ok) {
+              showStatus(
+                data.error || "Login failed. Check your credentials.",
+                true
+              );
+              return;
+            }
+
+            // Success
+            showStatus("Login successful. Redirecting…", false);
+            window.location.href = "admin.html";
+          } catch (err) {
+            console.error("Login error:", err);
+            showStatus("Error connecting to server. Try again.", true);
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

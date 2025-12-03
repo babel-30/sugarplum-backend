@@ -529,6 +529,9 @@ const { Client, Environment } = require("square/legacy");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Serve static admin assets (HTML/CSS/JS) from ./public
+app.use(express.static(path.join(__dirname, "public")));
+
 // ===== Render / proxy awareness (HTTPS cookies, etc.) =====
 if (process.env.NODE_ENV === "production") {
   // Required so Express trusts Render's proxy and sees HTTPS correctly
