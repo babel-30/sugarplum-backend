@@ -1277,6 +1277,7 @@ async function refreshInventoryForCatalog() {
     await refreshCatalogFromSquare();
   }
 
+  // Collect all variation IDs we care about
   const allVariationIds = [];
   cachedCatalog.forEach((item) => {
     (item.variations || []).forEach((v) => {
@@ -1289,7 +1290,9 @@ async function refreshInventoryForCatalog() {
     allVariationIds.length
   );
 
+  // For each variation ID, we keep ONLY the latest IN_STOCK count
   const quantityByVariationId = {};
+  const latestTsByVariationId = {};
 
   if (allVariationIds.length > 0) {
     try {
@@ -1302,24 +1305,53 @@ async function refreshInventoryForCatalog() {
 
       for (const c of counts) {
         const varId = c.catalogObjectId;
-        const q = c.quantity ? Number(c.quantity) : 0;
+        if (!varId) continue;
 
-        if (!quantityByVariationId[varId]) {
-          quantityByVariationId[varId] = 0;
+        // Only consider actual in-stock counts
+        if (c.state && c.state !== "IN_STOCK") {
+          continue;
         }
-        quantityByVariationId[varId] += isNaN(q) ? 0 : q;
+
+        const rawQty =
+          c.quantity !== undefined && c.quantity !== null
+            ? Number(c.quantity)
+            : 0;
+        if (Number.isNaN(rawQty)) continue;
+
+        // Use the most recent calculated/updated time
+        const tsStr = c.calculatedAt || c.updatedAt || c.occurredAt || null;
+        const ts = tsStr ? new Date(tsStr).getTime() : 0;
+
+        const prevTs = latestTsByVariationId[varId] || 0;
+        if (ts >= prevTs) {
+          latestTsByVariationId[varId] = ts;
+
+          // Clamp any weird negatives to 0 just in case
+          quantityByVariationId[varId] = rawQty < 0 ? 0 : rawQty;
+        }
       }
     } catch (invErr) {
       console.error("Error retrieving inventory counts:", invErr);
     }
   }
 
+  // Build new base products with safe quantities
   const newBaseProducts = cachedCatalog.map((item) => {
     const variationsWithQty = (item.variations || []).map((v) => {
-      const quantity = quantityByVariationId[v.id] ?? 0;
+      const raw = quantityByVariationId[v.id];
+
+      let safeQty = 0;
+      if (raw !== undefined && raw !== null) {
+        const n = Number(raw);
+        safeQty = Number.isNaN(n) ? 0 : n;
+      }
+
+      // Extra safety: never allow negative here
+      if (safeQty < 0) safeQty = 0;
+
       return {
         ...v,
-        quantity,
+        quantity: safeQty,
       };
     });
 
