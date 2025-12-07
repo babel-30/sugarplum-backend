@@ -27,6 +27,7 @@ const fs = require("fs");
 const path = require("path");
 const archiver = require("archiver");
 const nodemailer = require("nodemailer");
+const sendToPrinter = require("./utils/thermalPrinter");
 
 // Optional PDF support (packing list)
 let PDFDocument = null;
@@ -36,6 +37,46 @@ try {
   console.warn(
     'pdfkit not installed; packing slip PDF endpoint "/admin/orders/:id/packing-slip" will be disabled.'
   );
+}
+
+// Optional BARCODE support (bwip-js) for label generation
+let bwipjs = null;
+try {
+  bwipjs = require("bwip-js");
+} catch (err) {
+  console.warn(
+    'bwip-js not installed; barcode label endpoint "/admin/generate-barcodes" will be disabled.'
+  );
+}
+
+// 2x1" label constants for SP410BT labels (PDF points: 72pt = 1")
+const INCH = 72;
+const LABEL_WIDTH_2x1 = 2 * INCH;
+const LABEL_HEIGHT_2x1 = 1 * INCH;
+// Helper: build TSPL for a single 2x1 label item
+function buildTsplForItem(sku, labelText, quantity) {
+  // quantity = how many labels to print for this item
+  const safeSku = sku || "";
+  const safeLabel = labelText || "";
+
+  const tsplLines = [
+    // 2" wide (~50mm) x ~1" tall
+    "SIZE 50 mm,25 mm",
+    // For your continuous test roll; when you get real 2x1 labels,
+    // change this to: GAP 3 mm,0 mm
+    "GAP 0 mm,0 mm",
+    "CLS",
+    // Big, centered-ish barcode (same as our tuned test route)
+    `BARCODE 40,20,"128",90,0,0,3,6,"${safeSku}"`,
+    // SKU text under barcode
+    `TEXT 80,120,"3",0,1,1,"${safeSku}"`,
+    // Description below that
+    `TEXT 40,150,"3",0,1,1,"${safeLabel}"`,
+    // print N copies of this label
+    `PRINT 1,${Number(quantity) || 1}`
+  ];
+
+  return tsplLines.join("\r\n") + "\r\n";
 }
 
 // ===== EMAIL CONFIG & HELPERS =====
@@ -531,10 +572,15 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static(path.join(__dirname, "public")));
 
 // ===== Render / proxy awareness (HTTPS cookies, etc.) =====
-if (process.env.NODE_ENV === "production") {
-  // Required so Express trusts Render's proxy and sees HTTPS correctly
+const IS_RENDER = !!process.env.RENDER;
+const IS_PROD_LIKE =
+  process.env.NODE_ENV === "production" || IS_RENDER;
+
+// For Render / HTTPS behind proxy, we must trust the proxy
+if (IS_PROD_LIKE) {
   app.set("trust proxy", 1);
 }
+
 
 // ===== Middleware =====
 
@@ -596,16 +642,19 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      // Needed for cross-site cookies (frontend on shopsugarplum.co,
-      // backend on sugarplum-backend.onrender.com)
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+
+      // On Render / production-like: cross-site cookie (needed for
+      // shopsugarplum.co → sugarplum-backend.onrender.com with fetch + credentials)
+      secure: IS_PROD_LIKE,                         // cookie only over HTTPS
+      sameSite: IS_PROD_LIKE ? "none" : "lax",      // "none" for cross-site, "lax" for local dev
+
       // IMPORTANT: do NOT set "domain" here; let it default
-      // to sugarplum-backend.onrender.com so the cookie is accepted.
+      // so the browser accepts the cookie for the backend host.
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
   })
 );
+
 
 // ---- Square client ----
 if (!process.env.SQUARE_ACCESS_TOKEN) {
@@ -702,7 +751,8 @@ function parseVariationName(vName) {
     .map((p) => p.trim())
     .filter(Boolean);
 
-  // Normalized list of size "tokens" we care about
+  // Normalized list of size "tokens" we care about.
+  // These are compared AFTER stripping spaces, hyphens, and periods.
   const SIZE_TOKENS = [
     "nb",
     "0-3m",
@@ -725,39 +775,44 @@ function parseVariationName(vName) {
     "m",
     "l",
     "xl",
+    "2xl",
+    "3xl",
+    "4xl",
+    "5xl",
+    "2x",
+    "3x",
+    "4x",
+    "5x",
     "xxl",
     "xxxl",
     "xxxxl",
-    "2x",
-    "2xl",
-    "3x",
-    "3xl",
-    "4x",
-    "4xl",
-    "5x",
-    "5xl",
+    "xlarge",
+    "2xlarge",
+    "3xlarge",
   ];
 
   function looksLikeSize(partLower) {
-    const normalized = partLower.replace(/\s+/g, "");
+    // remove spaces, hyphens, and periods so:
+    // "X-Large" -> "xlarge", "S." -> "s"
+    const compact = partLower.replace(/[\s.-]/g, "");
 
-    // S / M / L / XL / 2X style
-    if (SIZE_TOKENS.includes(normalized)) return true;
+    // Direct token match (xl, 2xl, xlarge, etc.)
+    if (SIZE_TOKENS.includes(compact)) return true;
 
     // Words like "small", "medium", "large"
     if (
-      normalized === "small" ||
-      normalized === "medium" ||
-      normalized === "large"
+      compact === "small" ||
+      compact === "medium" ||
+      compact === "large"
     ) {
       return true;
     }
 
     // Youth / toddler / 2T etc.
     if (
-      normalized.includes("youth") ||
-      normalized.includes("toddler") ||
-      /^\d+t$/.test(normalized)
+      compact.includes("youth") ||
+      compact.includes("toddler") ||
+      /^\d+t$/.test(compact) // 2t, 3t, 4t, etc.
     ) {
       return true;
     }
@@ -806,16 +861,38 @@ function parseVariationName(vName) {
     }
   }
 
-  // Normalize "Small/Medium/Large" to S/M/L so they line up
+  // Normalize sizes so they line up nicely in the UI
   if (size) {
-    const sLower = size.toLowerCase().trim();
-    if (sLower === "small") size = "S";
-    else if (sLower === "medium") size = "M";
-    else if (sLower === "large") size = "L";
+    const raw = size.toLowerCase().trim();
+    const compact = raw.replace(/[\s.-]/g, ""); // "x-large" -> "xlarge"
+
+    if (raw === "small") {
+      size = "S";
+    } else if (raw === "medium") {
+      size = "M";
+    } else if (raw === "large") {
+      size = "L";
+    } else if (
+      ["xl", "x-large", "x large", "xlarge"].includes(raw) ||
+      ["xl", "xlarge"].includes(compact)
+    ) {
+      size = "XL";
+    } else if (
+      ["2xl", "xxl", "2x"].includes(raw) ||
+      ["2xl", "xxl", "2x", "2xlarge"].includes(compact)
+    ) {
+      size = "2XL";
+    } else if (
+      ["3xl", "xxxl", "3x"].includes(raw) ||
+      ["3xl", "xxxl", "3x", "3xlarge"].includes(compact)
+    ) {
+      size = "3XL";
+    }
   }
 
   return { size, color };
 }
+
 
 // small helper for word-matching in description
 function hasWordOrTag(descLower, base) {
@@ -1214,35 +1291,40 @@ async function refreshCatalogFromSquare() {
     );
     const subcategory = inferSubcategory(rawName, data.description);
 
-    const variations = (data.variations || []).map((v) => {
-      const vData = v.itemVariationData || {};
-      const { size, color } = parseVariationName(vData.name || "");
+const variations = (data.variations || []).map((v) => {
+  const vData = v.itemVariationData || {};
+  const { size, color } = parseVariationName(vData.name || "");
 
-      let price = 0;
-      if (vData.priceMoney && vData.priceMoney.amount != null) {
-        price = Number(vData.priceMoney.amount) / 100;
-      }
+  let price = 0;
+  if (vData.priceMoney && vData.priceMoney.amount != null) {
+    price = Number(vData.priceMoney.amount) / 100;
+  }
 
-      // NEW: read custom attribute for print location (if defined)
-      const ca = v.customAttributeValues || {};
-      let printLocation = null;
-      if (
-        ca[PRINT_LOCATION_CA_KEY] &&
-        typeof ca[PRINT_LOCATION_CA_KEY].stringValue === "string"
-      ) {
-        printLocation = ca[PRINT_LOCATION_CA_KEY].stringValue.trim();
-      }
+  // NEW: read custom attribute for print location (if defined)
+  const ca = v.customAttributeValues || {};
+  let printLocation = null;
+  if (
+    ca[PRINT_LOCATION_CA_KEY] &&
+    typeof ca[PRINT_LOCATION_CA_KEY].stringValue === "string"
+  ) {
+    printLocation = ca[PRINT_LOCATION_CA_KEY].stringValue.trim();
+  }
 
-      return {
-        id: v.id,
-        name: vData.name,
-        price,
-        size,
-        color,
-        printLocation, // <-- new field (may be null for now)
-        // quantity will be filled in by inventory refresh
-      };
-    });
+  // Square variation SKU (used as barcode text)
+  const sku = vData.sku || null;
+
+  return {
+    id: v.id,
+    name: vData.name,
+    price,
+    size,
+    color,
+    sku,
+    printLocation, // may be null
+    // quantity will be filled in by inventory refresh
+  };
+});
+
 
     normalizedCatalog.push({
       id: item.id,
@@ -1633,6 +1715,34 @@ function getServerAvailableQtyForCartItem(cartItem, baseProducts) {
   return 0;
 }
 
+// Given a SKU or variation id, find the matching variation in our cached products
+function findVariationBySkuOrId(identifier, baseProducts) {
+  if (!identifier) return null;
+  const needle = String(identifier).trim().toLowerCase();
+
+  for (const p of baseProducts || []) {
+    for (const v of p.variations || []) {
+      const sku = (v.sku || "").toLowerCase();
+      const id = (v.id || "").toLowerCase();
+
+      if (sku === needle || id === needle) {
+        return {
+          productId: p.id,
+          productName: p.name,
+          variationId: v.id,
+          sku: v.sku || null,
+          currentQty:
+            typeof v.quantity === "number" && !Number.isNaN(v.quantity)
+              ? v.quantity
+              : null,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 // ============== CHECKOUT ENDPOINT ==============
 // Uses adminConfig.shippingFlatRate + adminConfig.freeShippingThreshold
 // to add a "Shipping" line item to the Square Payment Link.
@@ -1978,7 +2088,256 @@ app.post("/checkout", async (req, res) => {
   }
 });
 
+// Admin: products + full variations for barcode tools (includes zero inventory)
+app.get("/admin/barcode-products", requireAdmin, async (req, res) => {
+  try {
+    await ensureCatalogFresh();
+    await ensureInventoryInitialized();
 
+    const baseProducts = cachedBaseProducts || [];
+
+    const products = baseProducts.map((p) => ({
+      id: p.id,
+      name: p.name,
+      type: p.type || null,
+      subcategory: p.subcategory || null,
+      variations: (p.variations || []).map((v) => ({
+        id: v.id,
+        name: v.name,
+        sku: v.sku || null,
+        size: v.size || null,
+        color: v.color || null,
+        quantity:
+          typeof v.quantity === "number" && !Number.isNaN(v.quantity)
+            ? v.quantity
+            : 0,
+      })),
+    }));
+
+    res.json({
+      products,
+      lastCatalogFetch,
+      lastInventoryFetch,
+    });
+  } catch (err) {
+    console.error("Error in /admin/barcode-products:", err);
+    res.status(500).json({ error: "Failed to load barcode products." });
+  }
+});
+
+// ===== ADMIN: APPLY INVENTORY COUNTS (DELTA MODE) =====
+//
+// Frontend payload (from barcode / scanner UI) still looks like:
+//
+// {
+//   "mode": "set_absolute",   // ignored now, kept for compatibility
+//   "updates": [
+//     { "sku": "4073372", "newQty": 5 },
+//     { "catalogObjectId": "VARIATION_ID_HERE", "newQty": -2 }
+//   ]
+// }
+//
+// BUT HERE we treat `newQty` as a **DELTA** (±), not an absolute quantity:
+//
+//   newAbsoluteQty = max(currentQtyFromSquare + newQty, 0)
+//
+// Then we send a PHYSICAL_COUNT to Square with `quantity = newAbsoluteQty`.
+//
+// This means if Square currently has 5 in stock and you enter 3,
+// we will set the final stock to 8, not overwrite it to 3.
+//
+async function handleInventoryDelta(req, res) {
+  console.log(
+    "[/admin/apply-inventory-count] DELTA HANDLER body:",
+    JSON.stringify(req.body, null, 2)
+  );
+
+  try {
+    const { updates } = req.body || {};
+
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({
+        error: "Request body must include updates array.",
+      });
+    }
+
+    const locationId = process.env.SQUARE_LOCATION_ID;
+    if (!locationId) {
+      return res.status(500).json({
+        error: "SQUARE_LOCATION_ID is not configured on the server.",
+      });
+    }
+
+    // 🧠 Always base deltas on a fresh snapshot from Square
+    await ensureCatalogFresh();
+    await ensureInventoryInitialized();
+    await refreshInventoryForCatalog();
+
+    const baseProducts = cachedBaseProducts || [];
+    const inventoryApi = squareClient.inventoryApi;
+
+    const idempotencyKey = crypto.randomUUID
+      ? crypto.randomUUID()
+      : crypto.randomBytes(16).toString("hex");
+
+    const changes = [];
+    const applied = [];
+    const errors = [];
+
+    for (const raw of updates) {
+      if (!raw) continue;
+
+      // Treat newQty as DELTA (±)
+      const deltaRaw =
+        raw.newQty != null
+          ? Number(raw.newQty)
+          : raw.count != null
+          ? Number(raw.count)
+          : NaN;
+
+      if (!Number.isFinite(deltaRaw) || deltaRaw === 0) {
+        errors.push({
+          input: raw,
+          error:
+            "Missing or invalid delta in newQty (must be a non-zero number).",
+        });
+        continue;
+      }
+
+      // identifier can be SKU or catalogObjectId/variationId
+      const identifier =
+        raw.catalogObjectId || raw.variationId || raw.sku || raw.SKU;
+
+      if (!identifier) {
+        errors.push({
+          input: raw,
+          error: "Missing identifier (need sku or catalogObjectId).",
+        });
+        continue;
+      }
+
+      // NOTE: our helper is (identifier, baseProducts)
+      const match = findVariationBySkuOrId(identifier, baseProducts);
+      if (!match) {
+        errors.push({
+          input: raw,
+          identifier,
+          error: "Could not find matching variation by SKU/id.",
+        });
+        continue;
+      }
+
+      const currentQtyNum =
+        typeof match.currentQty === "number" &&
+        !Number.isNaN(match.currentQty)
+          ? match.currentQty
+          : 0;
+
+      // 🔢 Square's true current qty + your delta
+      let newQty = currentQtyNum + deltaRaw;
+      if (newQty < 0) newQty = 0;
+      newQty = Math.floor(newQty);
+
+      // If no change, just log it and skip sending a Square change
+      if (newQty === currentQtyNum) {
+        applied.push({
+          input: raw,
+          productId: match.productId,
+          productName: match.productName,
+          variationId: match.variationId,
+          sku: match.sku,
+          previousQty: currentQtyNum,
+          newQty,
+          appliedDelta: 0,
+          note: "No change (delta results in same quantity).",
+        });
+        continue;
+      }
+
+      const occurredAt = new Date().toISOString();
+
+      // PHYSICAL_COUNT with the **absolute** final quantity
+      changes.push({
+        type: "PHYSICAL_COUNT",
+        physicalCount: {
+          catalogObjectId: match.variationId,
+          locationId,
+          state: "IN_STOCK",
+          quantity: newQty.toString(),
+          occurredAt,
+        },
+      });
+
+      applied.push({
+        input: raw,
+        productId: match.productId,
+        productName: match.productName,
+        variationId: match.variationId,
+        sku: match.sku,
+        previousQty: currentQtyNum,
+        newQty,
+        appliedDelta: deltaRaw,
+      });
+    }
+
+    if (changes.length === 0) {
+      return res.status(400).json({
+        error:
+          "No valid inventory changes to apply. Enter non-zero deltas in the New Qty column.",
+        details: errors,
+        applied,
+      });
+    }
+
+    const result = await inventoryApi.batchChangeInventory({
+      idempotencyKey,
+      changes,
+    });
+
+    // Refresh cache after applying, so admin views stay in sync
+    try {
+      await refreshInventoryForCatalog();
+    } catch (refreshErr) {
+      console.error(
+        "Inventory refresh after /admin/apply-inventory-count failed:",
+        refreshErr
+      );
+    }
+
+    return res.json({
+      ok: true,
+      mode: "delta",
+      appliedCount: applied.length,
+      applied,
+      errors,
+      squareResult: result.result || null,
+    });
+  } catch (err) {
+    console.error("Error in /admin/apply-inventory-count (delta):", err);
+    return res.status(500).json({
+      error: "Failed to apply inventory counts (delta mode).",
+      details: err.message || String(err),
+    });
+  }
+}
+
+// Main route used by the admin UI (Send to Square button)
+app.post(
+  "/admin/apply-inventory-count",
+  requireAdmin,
+  (req, res) => {
+    handleInventoryDelta(req, res);
+  }
+);
+
+// Alias route (for future /admin/inventory/apply usage)
+app.post(
+  "/admin/inventory/apply",
+  requireAdmin,
+  (req, res) => {
+    handleInventoryDelta(req, res);
+  }
+);
 
 // ===== ADMIN: REFRESH INVENTORY (THANK-YOU PING) =====
 // Called by thank-you.html after a successful Square checkout.
@@ -2325,6 +2684,169 @@ app.put("/admin/products", requireAdmin, (req, res) => {
   res.json({ ok: true, productConfig });
 });
 
+
+// ========== ADMIN: GENERATE BARCODES (PDF / PRINT / BOTH) ==========
+app.post("/admin/generate-barcodes", async (req, res) => {
+  try {
+    const { items = [], mode } = req.body || {};
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "No items provided." });
+    }
+
+    // Normalize mode
+    // default: "pdf" so your old curl still works without changes
+    const modeNormalized = (mode || "pdf").toLowerCase();
+
+    const doPrint = modeNormalized === "print" || modeNormalized === "both";
+    const doPdf = modeNormalized === "pdf" || modeNormalized === "both";
+
+    // --- PRINT MODE (Bluetooth TSPL via COM3) ---
+    if (doPrint) {
+      console.log(">>> /admin/generate-barcodes: PRINT mode");
+
+      // Print each item sequentially so we don't hammer the COM port
+      for (const item of items) {
+        const sku = item.sku || "";
+        const labelText = item.labelText || "";
+        const quantity = item.quantity || 1;
+
+        const tspl = buildTsplForItem(sku, labelText, quantity);
+        console.log(`Sending TSPL for SKU=${sku}, qty=${quantity}`);
+        await sendToPrinter(tspl);
+      }
+
+      console.log(">>> All print jobs sent.");
+    }
+
+        // --- PDF MODE (2x1 label style, with real barcode) ---
+    if (doPdf) {
+      console.log(">>> /admin/generate-barcodes: PDF mode");
+
+      if (!PDFDocument) {
+        console.error("PDFKit not available on this server.");
+        return res
+          .status(500)
+          .json({ error: "PDF generation not available on this server." });
+      }
+
+      // Headers for PDF download
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="labels.pdf"'
+      );
+
+      // We'll create pages manually so we can do 1 label per page
+      const doc = new PDFDocument({ autoFirstPage: false, margin: 36 });
+      doc.pipe(res);
+
+      // For each item, create `quantity` labels
+      for (const item of items) {
+        const sku = item.sku || "";
+        const labelText = item.labelText || "";
+        const quantity = Number(item.quantity) || 1;
+
+        for (let i = 0; i < quantity; i++) {
+          // New page per label
+          doc.addPage({ size: "LETTER", margin: 36 });
+
+          const pageWidth = doc.page.width;
+          const pageHeight = doc.page.height;
+
+          // Our 2x1" label area (in PDF points: 72pt per inch)
+          const labelWidth = LABEL_WIDTH_2x1;   // 2" wide
+          const labelHeight = LABEL_HEIGHT_2x1; // 1" tall
+
+          // Center the label on the page
+          const x = (pageWidth - labelWidth) / 2;
+          const y = (pageHeight - labelHeight) / 2;
+
+          // Draw a light border so you can see the label outline
+          doc
+            .lineWidth(0.5)
+            .roundedRect(x, y, labelWidth, labelHeight, 4)
+            .stroke();
+
+          let currentY = y + 6;
+
+          // --- BARCODE IMAGE (using bwip-js if available) ---
+          if (bwipjs) {
+            try {
+              const barcodeBuffer = await bwipjs.toBuffer({
+                bcid: "code128",
+                text: sku || "",
+                scale: 2.5,   // thickness of bars
+                height: 10,   // bar height in "mm-like" units
+                includetext: false,
+              });
+
+              // Leave a little margin inside label
+              const barcodeWidth = labelWidth - 16;
+              doc.image(barcodeBuffer, x + 8, currentY, {
+                width: barcodeWidth,
+              });
+
+              // Move down roughly barcode height + padding
+              currentY += 40;
+            } catch (err) {
+              console.warn("bwip-js failed for PDF label – falling back:", err);
+              doc
+                .fontSize(9)
+                .text(`|| ${sku} ||`, x + 8, currentY, {
+                  width: labelWidth - 16,
+                  align: "center",
+                });
+              currentY += 18;
+            }
+          } else {
+            // Fallback if bwip-js is not available
+            doc
+              .fontSize(9)
+              .text(`|| ${sku} ||`, x + 8, currentY, {
+                width: labelWidth - 16,
+                align: "center",
+              });
+            currentY += 18;
+          }
+
+          // --- SKU text ---
+          doc
+            .fontSize(10)
+            .text(sku, x + 8, currentY, {
+              width: labelWidth - 16,
+              align: "center",
+            });
+          currentY += 14;
+
+          // --- Description text ---
+          doc
+            .fontSize(8)
+            .text(labelText, x + 8, currentY, {
+              width: labelWidth - 16,
+              align: "center",
+            });
+        }
+      }
+
+      doc.end();
+      return;
+    }
+
+
+    // If we got here, we did PRINT but no PDF
+    return res.json({
+      ok: true,
+      message: "Labels processed.",
+      mode: modeNormalized,
+    });
+  } catch (err) {
+    console.error("Error in /admin/generate-barcodes:", err);
+    res.status(500).json({ error: "Failed to generate barcodes." });
+  }
+});
+
+
 //
 // ===== Admin: Orders from local DB (NOT from Square) =====
 //
@@ -2415,6 +2937,55 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
   }
 });
 
+
+// ========== ADMIN: TEST BARCODE PRINT (2x1 label, tuned v3) ==========
+app.all("/admin/print-barcode-test", async (req, res) => {
+  try {
+    console.log(">>> /admin/print-barcode-test HIT via", req.method);
+
+    const sku = "TEST-001";
+    const labelText = "Jazz Tee - Red XL";
+    const quantity = 1; // one per click
+
+    // 2" wide (~50mm), a bit taller so we have room for text
+    const tsplLines = [
+      "SIZE 50 mm,25 mm",   // was 20 mm tall; now 25 mm (~1")
+      // Continuous paper for now; switch to GAP 3mm,0mm with real 2x1 labels
+      "GAP 0 mm,0 mm",
+      "CLS",
+
+      // Bigger, centered-ish barcode:
+      // 50mm wide label ≈ 400 dots; x=40 is a decent inset
+      // height=90 so it doesn't eat all vertical space
+      // readable=0 so only our TEXT shows the SKU
+      `BARCODE 40,20,"128",90,0,0,3,6,"${sku}"`,
+
+      // SKU text under barcode (try to center-ish)
+      // y=120 should be safely below the barcode
+      `TEXT 80,120,"3",0,1,1,"${sku}"`,
+
+      // Description below that, slightly left-aligned so it fits
+      // y=150 is safely inside 25mm (≈200 dots)
+      `TEXT 40,150,"3",0,1,1,"${labelText}"`,
+
+      `PRINT 1,${quantity}`
+    ];
+
+    const tsplCommand = tsplLines.join("\r\n") + "\r\n";
+
+    await sendToPrinter(tsplCommand);
+
+    console.log(">>> Test barcode TSPL sent to printer.");
+    res.json({ ok: true, message: "Test barcode sent to printer." });
+  } catch (err) {
+    console.error("Error in /admin/print-barcode-test:", err);
+    res.status(500).json({ error: "Failed to send test barcode to printer." });
+  }
+});
+
+
+
+
 // =========================
 // ARCHIVE DOWNLOAD ROUTE
 // MUST be placed BEFORE /admin/orders/:id
@@ -2443,22 +3014,28 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
 
     const rows = stmt.all();
 
-    if (!rows || rows.length === 0) {
+    if (rows == null || rows.length === 0) {
       return res.status(200).json({
         ok: true,
         message: "No archived orders to download.",
       });
     }
 
+    // Make sure exports dir exists
     if (!fs.existsSync(EXPORTS_DIR)) {
       fs.mkdirSync(EXPORTS_DIR, { recursive: true });
     }
 
     const now = new Date();
-    const stamp = now.toISOString().split("T")[0];
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const stamp = `${year}-${month}-${day}`;
+
     const zipName = `orders-archive-${stamp}.zip`;
     const zipPath = path.join(EXPORTS_DIR, zipName);
 
+    // Create the zip file with a single JSON file inside
     await new Promise((resolve, reject) => {
       const output = fs.createWriteStream(zipPath);
       const archive = archiver("zip", { zlib: { level: 9 } });
@@ -2467,10 +3044,14 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
       archive.on("error", reject);
 
       archive.pipe(output);
-      archive.append(JSON.stringify(rows, null, 2), { name: "orders.json" });
+
+      const jsonContent = JSON.stringify(rows, null, 2);
+      archive.append(jsonContent, { name: "orders.json" });
+
       archive.finalize();
     });
 
+    // Send the zip as a download, then clean up
     res.setHeader("Content-Type", "application/zip");
     res.setHeader(
       "Content-Disposition",
@@ -2480,16 +3061,22 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
     const readStream = fs.createReadStream(zipPath);
 
     readStream.on("close", () => {
+      // Delete the temp zip file
       try {
         fs.unlinkSync(zipPath);
       } catch (e) {
-        console.error("Failed to delete temp zip:", e);
+        console.error("Failed to delete temp orders archive zip:", e);
       }
 
+      // Remove archived orders from DB
       try {
-        db.prepare(`DELETE FROM orders WHERE status = 'ARCHIVED'`).run();
+        const deleteStmt = db.prepare(
+          `DELETE FROM orders WHERE status = 'ARCHIVED'`
+        );
+        deleteStmt.run();
+        console.log("Archived orders deleted from DB after download.");
       } catch (dbErr) {
-        console.error("Failed to delete archived orders:", dbErr);
+        console.error("Failed to delete archived orders from DB:", dbErr);
       }
     });
 
@@ -2574,226 +3161,333 @@ app.get("/admin/orders/:id", requireAdmin, (req, res) => {
     console.error("Error fetching order details:", err);
     res.status(500).json({ error: "Failed to load order details." });
   }
-});
+});// ===== PACKING SLIP HELPERS (PDF + BARCODE) =====
 
-// ===== PACKING LIST PDF (Admin-only) =====
-app.get("/admin/orders/:id/packing-slip", requireAdmin, (req, res) => {
-  try {
-    if (!PDFDocument) {
-      return res
-        .status(500)
-        .send("PDF generation is not available (pdfkit not installed).");
-    }
+// Generate a barcode PNG buffer for a given text (SKU) using bwip-js.
+// If bwip-js is not available, we just return null and skip the barcode.
+function generateBarcodePng(text) {
+  const value = text || "NO-SKU";
 
-    const id = resolveOrderId(req.params.id);
-    if (!id) {
-      return res.status(400).send("Invalid order id.");
-    }
+  if (!bwipjs) {
+    return Promise.resolve(null);
+  }
 
-    const stmt = db.prepare(`
-      SELECT
-        id,
-        customer_name,
-        customer_email,
-        status,
-        tracking_number,
-        items_json,
-        shipping_json,
-        total_money,
-        currency,
-        created_at
-      FROM orders
-      WHERE id = ?
-    `);
-
-    const row = stmt.get(id);
-    if (!row) {
-      return res.status(404).send("Order not found.");
-    }
-
-    let items = [];
-    let shipping = null;
-
-    try {
-      if (row.items_json) items = JSON.parse(row.items_json);
-    } catch (e) {
-      console.error("Failed to parse items_json for packing list", id, e);
-    }
-
-    try {
-      if (row.shipping_json) shipping = JSON.parse(row.shipping_json);
-    } catch (e) {
-      console.error("Failed to parse shipping_json for packing list", id, e);
-    }
-
-    // ---- Format date in Central Time ----
-    let createdLocalStr = row.created_at || "";
-    if (row.created_at) {
-      try {
-        const d = new Date(row.created_at);
-        createdLocalStr = d.toLocaleString("en-US", {
-          timeZone: "America/Chicago",
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-      } catch (e) {
-        console.error("Failed to format created_at for packing slip", e);
+  return new Promise((resolve, reject) => {
+    bwipjs.toBuffer(
+      {
+        bcid: "code128",
+        text: value,
+        scale: 3,       // bar thickness
+        height: 10,     // bar height (mm-ish units)
+        includetext: false,
+        textxalign: "center",
+      },
+      (err, png) => {
+        if (err) return reject(err);
+        resolve(png);
       }
-    }
-
-    // Prepare PDF response
-    const safeOrderId = String(row.id).replace(/[^a-zA-Z0-9_-]/g, "");
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename=packing-list-${safeOrderId}.pdf`
     );
-    res.setHeader("Content-Type", "application/pdf");
+  });
+}
 
-    const doc = new PDFDocument({ margin: 40 });
-    doc.pipe(res);
+// Central helper to render the packing slip PDF with SKUs + barcodes
+async function generatePackingSlipPDF(row, items, shipping, res) {
+  if (!PDFDocument) {
+    throw new Error("PDF generation is not available (PDFDocument is null).");
+  }
 
-    // Header
-    doc
-      .fontSize(18)
-      .text("Sugar Plum Creations", { align: "center" })
-      .moveDown(0.3);
-
-    doc
-      .fontSize(14)
-      .text("Packing List", { align: "center" })
-      .moveDown(1);
-
-    // Order summary
-    const total =
-      row.total_money != null ? (Number(row.total_money) / 100).toFixed(2) : "";
-    const customerName = row.customer_name || "";
-    const customerEmail = row.customer_email || "";
-
-    doc.fontSize(10);
-    doc.text(`Order #: ${row.id}`);
-    doc.text(`Date (Central Time): ${createdLocalStr}`);
-    if (total) {
-      doc.text(`Order Total: $${total}`);
-    }
-    if (row.status) {
-      doc.text(`Status: ${row.status}`);
-    }
-    doc.moveDown(0.5);
-
-    // Shipping block
-    const shipName =
-      (shipping && (shipping.name || shipping.customerName)) || customerName;
-    const shipEmail =
-      (shipping && (shipping.email || shipping.customerEmail)) ||
-      customerEmail;
-    const addressLines = [];
-    if (
-      shipping &&
-      (shipping.address1 ||
-        shipping.address2 ||
-        shipping.city ||
-        shipping.state ||
-        shipping.zip)
-    ) {
-      if (shipping.address1) addressLines.push(shipping.address1);
-      if (shipping.address2) addressLines.push(shipping.address2);
-      const cityStateZip = [
-        shipping.city || "",
-        shipping.state || "",
-        shipping.zip || "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      if (cityStateZip) addressLines.push(cityStateZip);
-    }
-
-    doc.text("Ship To:", { underline: true });
-    if (shipName) doc.text(shipName);
-    if (shipEmail) doc.text(shipEmail);
-    addressLines.forEach((line) => doc.text(line));
-    doc.moveDown(0.5);
-
-    // Items header
-    doc
-      .fontSize(11)
-      .text("Items", { underline: true })
-      .moveDown(0.3);
-
-    const tableTop = doc.y;
-    const col1X = 40; // Item
-    const col2X = 260; // Color
-    const col3X = 360; // Size
-    const col4X = 430; // Qty
-
-    doc.fontSize(10);
-    doc.text("Item", col1X, tableTop);
-    doc.text("Color", col2X, tableTop);
-    doc.text("Size", col3X, tableTop);
-    doc.text("Qty", col4X, tableTop);
-
-    // Header divider
-    doc
-      .moveTo(col1X, tableTop + 12)
-      .lineTo(550, tableTop + 12)
-      .stroke();
-
-    let y = tableTop + 18;
-
-    // Items rows
-    (items || []).forEach((item) => {
-      const name = item.name || "Item";
-      const color = item.color || "";
-      const size = item.size || "";
-      const qty = item.quantity || item.qty || 1;
-
-      doc.text(name, col1X, y, { width: 200 });
-      doc.text(color, col2X, y, { width: 80 });
-      doc.text(size, col3X, y, { width: 60 });
-      doc.text(String(qty), col4X, y, { width: 30 });
-
-      y += 16;
-
-      // Simple page break
-      if (y > doc.page.height - 80) {
-        doc.addPage();
-        y = 40;
-      }
-    });
-
-    // Centered footer notes so they don't run off the page
-    doc.moveDown(2);
-    const margin = 40;
-    const footerStartY = doc.y;
-    const availableWidth = doc.page.width - margin * 2;
-
-    doc
-      .fontSize(9)
-      .text(
-        "This packing list is for internal use only. Prices are intentionally omitted.",
-        margin,
-        footerStartY,
-        { align: "center", width: availableWidth }
-      )
-      .moveDown(0.5);
-
-    doc.text(
-      "Thank you for supporting our small business!",
-      margin,
-      doc.y,
-      { align: "center", width: availableWidth }
-    );
-
-    doc.end();
-  } catch (err) {
-    console.error("Error generating packing list PDF:", err);
-    if (!res.headersSent) {
-      res.status(500).send("Failed to generate packing list.");
+  // ---- Format date in Central Time (same as before) ----
+  let createdLocalStr = row.created_at || "";
+  if (row.created_at) {
+    try {
+      const d = new Date(row.created_at);
+      createdLocalStr = d.toLocaleString("en-US", {
+        timeZone: "America/Chicago",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (e) {
+      console.error("Failed to format created_at for packing slip", e);
     }
   }
-});
+
+  const safeOrderId = String(row.id).replace(/[^a-zA-Z0-9_-]/g, "");
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename=packing-list-${safeOrderId}.pdf`
+  );
+  res.setHeader("Content-Type", "application/pdf");
+
+  const doc = new PDFDocument({ margin: 40 });
+  doc.pipe(res);
+
+  // ---------- HEADER ----------
+  doc
+    .fontSize(18)
+    .text("Sugar Plum Creations", { align: "center" })
+    .moveDown(0.3);
+
+  doc.fontSize(14).text("Packing List", { align: "center" }).moveDown(1);
+
+  // Order summary
+  const total =
+    row.total_money != null ? (Number(row.total_money) / 100).toFixed(2) : "";
+  const customerName = row.customer_name || "";
+  const customerEmail = row.customer_email || "";
+
+  doc.fontSize(10);
+  doc.text(`Order #: ${row.id}`);
+  doc.text(`Date (Central Time): ${createdLocalStr}`);
+  if (total) {
+    doc.text(`Order Total: $${total}`);
+  }
+  if (row.status) {
+    doc.text(`Status: ${row.status}`);
+  }
+  doc.moveDown(0.5);
+
+  // ---------- SHIPPING BLOCK ----------
+  const shipName =
+    (shipping && (shipping.name || shipping.customerName)) || customerName;
+  const shipEmail =
+    (shipping && (shipping.email || shipping.customerEmail)) || customerEmail;
+
+  const addressLines = [];
+  if (
+    shipping &&
+    (shipping.address1 ||
+      shipping.address2 ||
+      shipping.city ||
+      shipping.state ||
+      shipping.zip)
+  ) {
+    if (shipping.address1) addressLines.push(shipping.address1);
+    if (shipping.address2) addressLines.push(shipping.address2);
+    const cityStateZip = [
+      shipping.city || "",
+      shipping.state || "",
+      shipping.zip || "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    if (cityStateZip) addressLines.push(cityStateZip);
+  }
+
+  doc.text("Ship To:", { underline: true });
+  if (shipName) doc.text(shipName);
+  if (shipEmail) doc.text(shipEmail);
+  addressLines.forEach((line) => doc.text(line));
+  doc.moveDown(0.5);
+
+  // ---------- ITEMS HEADER ----------
+  doc
+    .fontSize(11)
+    .text("Items", { underline: true })
+    .moveDown(0.3);
+
+  const startX = 40;
+  const headerY = doc.y;
+
+  doc.fontSize(10);
+  doc.text("Qty", startX, headerY);
+  doc.text("Item", startX + 40, headerY);
+  doc.text("Variant", startX + 220, headerY);
+  doc.text("SKU", startX + 360, headerY);
+
+  doc.moveTo(startX, headerY + 12).lineTo(550, headerY + 12).stroke();
+
+  let y = headerY + 18;
+
+  // ---------- ITEMS + SKU BARCODES ----------
+  for (const item of items || []) {
+    const name = item.name || "Item";
+    const color = item.color || "";
+    const size = item.size || "";
+    const qty = item.quantity || item.qty || 1;
+    const sku = item.sku || item.SKU || "";
+
+    const variantParts = [color, size].filter(Boolean);
+    const variantText = variantParts.join(" / ");
+
+    // Simple page break
+    if (y > doc.page.height - 120) {
+      doc.addPage();
+      y = doc.page.margins ? doc.page.margins.top : 40;
+    }
+
+    doc.fontSize(10);
+    doc.text(String(qty), startX, y, { width: 30 });
+    doc.text(name, startX + 40, y, { width: 170 });
+    doc.text(variantText, startX + 220, y, { width: 120 });
+    doc.text(sku || "—", startX + 360, y, { width: 160 });
+
+    y += 16;
+
+    // Barcode directly under SKU if we have one + bwip-js
+    if (sku && bwipjs) {
+      try {
+        const barcodePng = await generateBarcodePng(sku);
+
+        if (barcodePng) {
+          const barcodeWidth = 160;
+          const barcodeHeight = 40;
+
+          doc.image(barcodePng, startX + 360, y, {
+            fit: [barcodeWidth, barcodeHeight],
+            align: "left",
+          });
+
+          y += barcodeHeight + 8;
+        }
+      } catch (err) {
+        console.error("Error generating barcode for SKU", sku, err);
+        doc
+          .fontSize(8)
+          .fillColor("red")
+          .text("(Barcode error)", startX + 360, y, { width: 160 });
+        doc.fillColor("black");
+        y += 14;
+      }
+    } else {
+      y += 4;
+    }
+
+    // Row divider
+    doc
+      .moveTo(startX, y)
+      .lineTo(550, y)
+      .strokeColor("#cccccc")
+      .stroke()
+      .strokeColor("black");
+
+    y += 8;
+  }
+
+  // ---------- FOOTER (auto-spacing, centered) ----------
+  const page = doc.page;
+  const margins = page.margins || {
+    top: 40,
+    bottom: 40,
+    left: 40,
+    right: 40,
+  };
+
+  const footerGap = 30; // minimum blank space after last row
+  const minFooterBlockHeight = 40; // how tall the footer text block roughly is
+
+  // Start footer a bit below the last used Y
+  let footerStartY = Math.max(y, doc.y) + footerGap;
+
+  // If that would cram it against the bottom, move footer to a new page
+  const maxFooterTop = page.height - margins.bottom - minFooterBlockHeight;
+  if (footerStartY > maxFooterTop) {
+    doc.addPage();
+    const newPage = doc.page;
+    const newMargins = newPage.margins || margins;
+    footerStartY = newMargins.top; // start near top of new page
+  }
+
+  const marginX = margins.left || 40;
+  const availableWidth =
+    page.width - (marginX + (margins.right || 40));
+
+  doc
+    .fontSize(9)
+    .text(
+      "This packing list is for internal use only. Prices are intentionally omitted.",
+      marginX,
+      footerStartY,
+      {
+        align: "center",
+        width: availableWidth,
+      }
+    )
+    .moveDown(0.75);
+
+  doc.text(
+    "Thank you for supporting our small business!",
+    marginX,
+    doc.y,
+    {
+      align: "center",
+      width: availableWidth,
+    }
+  );
+
+  doc.end();
+}
+
+
+// ===== PACKING LIST PDF (Admin-only) =====
+app.get(
+  "/admin/orders/:id/packing-slip",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      if (!PDFDocument) {
+        return res
+          .status(500)
+          .send("PDF generation is not available (pdfkit not installed).");
+      }
+
+      const id = resolveOrderId(req.params.id);
+      if (!id) {
+        return res.status(400).send("Invalid order id.");
+      }
+
+      const stmt = db.prepare(`
+        SELECT
+          id,
+          customer_name,
+          customer_email,
+          status,
+          tracking_number,
+          items_json,
+          shipping_json,
+          total_money,
+          currency,
+          created_at
+        FROM orders
+        WHERE id = ?
+      `);
+
+      const row = stmt.get(id);
+      if (!row) {
+        return res.status(404).send("Order not found.");
+      }
+
+      let items = [];
+      let shipping = null;
+
+      try {
+        if (row.items_json) items = JSON.parse(row.items_json);
+      } catch (e) {
+        console.error("Failed to parse items_json for packing list", id, e);
+      }
+
+      try {
+        if (row.shipping_json) shipping = JSON.parse(row.shipping_json);
+      } catch (e) {
+        console.error(
+          "Failed to parse shipping_json for packing list",
+          id,
+          e
+        );
+      }
+
+      await generatePackingSlipPDF(row, items, shipping, res);
+    } catch (err) {
+      console.error("Error generating packing list PDF:", err);
+      if (!res.headersSent) {
+        res.status(500).send("Failed to generate packing list.");
+      }
+    }
+  }
+);
+
 
 // Update order status + tracking, and fire status-based emails
 app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
@@ -2872,137 +3566,6 @@ app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
     console.error("Error updating order:", err);
     res.status(500).json({ error: "Failed to update order." });
   }
-});
-
-// Download and clear archived orders (protected)
-// Returns a ZIP containing a single orders.json file.
-// After a successful download, all ARCHIVED orders are removed from the DB.
-app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
-  try {
-    const stmt = db.prepare(`
-      SELECT
-        id,
-        square_order_id,
-        square_payment_link_id,
-        customer_name,
-        customer_email,
-        status,
-        tracking_number,
-        items_json,
-        shipping_json,
-        total_money,
-        currency,
-        created_at,
-        updated_at
-      FROM orders
-      WHERE status = 'ARCHIVED'
-      ORDER BY created_at ASC
-    `);
-
-    const rows = stmt.all();
-
-    if (rows == null || rows.length === 0) {
-      return res.status(200).json({
-        ok: true,
-        message: "No archived orders to download.",
-      });
-    }
-
-    // Make sure exports dir exists
-    if (!fs.existsSync(EXPORTS_DIR)) {
-      fs.mkdirSync(EXPORTS_DIR, { recursive: true });
-    }
-
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    const stamp = `${year}-${month}-${day}`;
-
-    const zipName = `orders-archive-${stamp}.zip`;
-    const zipPath = path.join(EXPORTS_DIR, zipName);
-
-    // Create the zip file with a single JSON file inside
-    await new Promise((resolve, reject) => {
-      const output = fs.createWriteStream(zipPath);
-      const archive = archiver("zip", { zlib: { level: 9 } });
- 
-
-      output.on("close", resolve);
-      archive.on("error", reject);
-
-      archive.pipe(output);
-
-      const jsonContent = JSON.stringify(rows, null, 2);
-      archive.append(jsonContent, { name: "orders.json" });
-
-      archive.finalize();
-    });
-
-    // Send the zip as a download, then clean up
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${zipName}"`
-    );
-
-    const readStream = fs.createReadStream(zipPath);
-
-    readStream.on("close", () => {
-      // Delete the temp zip file
-      try {
-        fs.unlinkSync(zipPath);
-      } catch (e) {
-        console.error("Failed to delete temp orders archive zip:", e);
-      }
-
-      // Remove archived orders from DB
-      try {
-        const deleteStmt = db.prepare(
-          `DELETE FROM orders WHERE status = 'ARCHIVED'`
-        );
-        deleteStmt.run();
-        console.log("Archived orders deleted from DB after download.");
-      } catch (dbErr) {
-        console.error("Failed to delete archived orders from DB:", dbErr);
-      }
-    });
-
-    readStream.pipe(res);
-  } catch (err) {
-    console.error("Error generating archived orders download:", err);
-    if (!res.headersSent) {
-      res.status(500).json({
-        error: "Failed to generate archived orders download.",
-      });
-    }
-  }
-});
-
-// ===== INVENTORY / CATALOG DEBUG STATUS =====
-app.get("/debug/inventory-status", (req, res) => {
-  const now = Date.now();
-
-  const minutesSinceInventory =
-    lastInventoryFetch > 0
-      ? ((now - lastInventoryFetch) / 60000).toFixed(1)
-      : null;
-
-  const minutesSinceCatalog =
-    lastCatalogFetch > 0
-      ? ((now - lastCatalogFetch) / 60000).toFixed(1)
-      : null;
-
-  res.json({
-    nodeEnv: process.env.NODE_ENV || null,
-    squareEnvironment: process.env.SQUARE_ENVIRONMENT || null,
-    lastInventoryFetch,
-    lastCatalogFetch,
-    minutesSinceInventory: minutesSinceInventory,
-    minutesSinceCatalog: minutesSinceCatalog,
-    inventoryTtlMs: INVENTORY_TTL_MS,
-    catalogTtlMs: CATALOG_TTL_MS,
-  });
 });
 
 // ===== BACKGROUND AUTO-REFRESH LOOPS =====
