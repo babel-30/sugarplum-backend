@@ -29,11 +29,11 @@ document.addEventListener("DOMContentLoaded", () => {
         return true;
       }
 
-      window.location.href = "admin-login.html";
+      window.location.href = "/admin-login";
       return false;
     } catch (err) {
       console.error("Error checking admin session:", err);
-      window.location.href = "admin-login.html";
+      window.location.href = "/admin-login";
       return false;
     }
   }
@@ -86,7 +86,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const flagsToggleBtn = document.getElementById("flags-toggle-btn");
   const flagsSearchInput = document.getElementById("flags-search");
   const flagsSubcatFilter = document.getElementById("flags-filter-subcat");
-  
+
   // --- Catalog / Inventory sync buttons ---
   const syncCatalogBtn = document.getElementById("btn-sync-catalog");
   const syncInventoryBtn = document.getElementById("btn-sync-inventory");
@@ -152,6 +152,56 @@ document.addEventListener("DOMContentLoaded", () => {
   const barcodeApplyInventoryBtn = document.getElementById(
     "barcode-apply-inventory-btn"
   );
+
+  // ===================== INACTIVITY AUTO-LOGOUT =====================
+  const INACTIVITY_DEFAULT_MS = 15 * 60 * 1000; // 15 minutes
+  const INACTIVITY_EXTENDED_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+  const timeoutToggle = document.getElementById("extend-timeout-toggle");
+  let inactivityTimerId = null;
+
+  function getCurrentTimeoutDuration() {
+    if (timeoutToggle && timeoutToggle.checked) {
+      return INACTIVITY_EXTENDED_MS;
+    }
+    return INACTIVITY_DEFAULT_MS;
+  }
+
+  function scheduleInactivityLogout() {
+    if (inactivityTimerId) {
+      clearTimeout(inactivityTimerId);
+    }
+    inactivityTimerId = setTimeout(
+      handleInactivityLogout,
+      getCurrentTimeoutDuration()
+    );
+  }
+
+  async function handleInactivityLogout() {
+    try {
+      // Try to destroy the server session too
+      await adminFetch("/admin/logout", { method: "POST" });
+    } catch (err) {
+      console.error("Auto-logout request failed:", err);
+    } finally {
+      // Frontend redirect either way
+      window.location.href = "/admin-login";
+    }
+  }
+
+  // Reset timer on any user activity
+  ["click", "keydown", "mousemove", "scroll", "touchstart", "touchmove"].forEach(
+    (evt) => {
+      window.addEventListener(evt, scheduleInactivityLogout, { passive: true });
+    }
+  );
+
+  // If they flip the toggle, recalc the timer using the new duration
+  if (timeoutToggle) {
+    timeoutToggle.addEventListener("change", () => {
+      scheduleInactivityLogout();
+    });
+  }
 
   // We keep the latest products from /admin/products here
   let adminProducts = [];
@@ -754,7 +804,6 @@ document.addEventListener("DOMContentLoaded", () => {
       showStatus(flagsStatusEl, "Error saving product flags.", true);
     }
   }
-
 
   // =======================
   //  CATALOG / INVENTORY SYNC
@@ -1403,13 +1452,15 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-
   // =======================
   //  INITIAL LOAD
   // =======================
   (async () => {
     const ok = await ensureAdminSession();
     if (!ok) return;
+
+    // Start inactivity timer once we know the session is valid
+    scheduleInactivityLogout();
 
     loadBannerConfig();
     loadOrders();
