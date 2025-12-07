@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Admin Dashboard – Sugar Plum Creations</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles-admin.css" />
+  </head>
+  <body class="admin">
+    <!-- Shared header -->
+    <header class="header">
+      <div class="header-brand">
+        <img
+          src="spc-logo-round.png"
+          alt="Sugar Plum Creations logo"
+          class="header-logo-img"
+        />
+        <a href="index.html" class="brand-link">
+          <span class="brand-logo-text">Sugar Plum Creations</span>
+        </a>
+      </div>
+
+      <nav class="header-nav">
+        <a href="kiosk.html" class="nav-link">Kiosk</a>
+        <a href="admin.html" class="nav-link nav-link-active">Admin</a>
+      </nav>
+    </header>
+
+    <main class="admin-main">
+      <!-- Announcement Banner Card -->
+      <section class="card admin-section">
+        <h2>Announcement Banner</h2>
+        <p class="admin-help-text">
+          Update the message that appears at the top of the customer site.
+        </p>
+
+        <form id="banner-form" class="admin-form">
+          <label class="admin-label" for="bannerText">
+            Banner Text
+          </label>
+          <textarea
+            id="bannerText"
+            name="bannerText"
+            rows="3"
+            class="admin-input"
+            placeholder="Example: We’re at the Christmas Market this weekend! Orders ship on Monday."
+          ></textarea>
+
+          <label class="admin-checkbox">
+            <input type="checkbox" id="bannerVisible" name="bannerVisible" />
+            <span>Show banner on site</span>
+          </label>
+
+          <button type="submit" class="btn-primary">
+            Save Settings
+          </button>
+
+          <p id="banner-status" class="admin-status"></p>
+        </form>
+
+        <!-- Shop Splash / Popup Controls -->
+        <div class="admin-subsection">
+          <h3>Shop Splash / Popup</h3>
+          <p class="admin-help-text">
+            Use this popup to temporarily close the online shop during events
+            or while you are updating inventory. This will show a full-screen
+            splash on the home/shop page (styled like the kiosk splash).
+          </p>
+
+          <div class="admin-form">
+            <label class="admin-checkbox">
+              <input type="checkbox" id="popupEnabled" />
+              <span>Enable shop splash popup</span>
+            </label>
+
+            <label class="admin-label" for="popupMode">
+              Popup Mode
+            </label>
+            <select id="popupMode" class="admin-input">
+              <option value="none">None</option>
+              <option value="event">Closed for Event</option>
+              <option value="inventory">Updating Inventory</option>
+              <option value="custom">Custom Message</option>
+            </select>
+
+            <label class="admin-label" for="popupCustomText">
+              Custom Popup Message
+            </label>
+            <textarea
+              id="popupCustomText"
+              rows="3"
+              class="admin-input"
+              placeholder="Example: Hey loyal customers! We’re currently at an event today, and to avoid selling the same item in-person and online, the online shop is temporarily closed. It’ll reopen once the event wraps up – thank you for your understanding!"
+            ></textarea>
+
+            <p id="popup-status" class="admin-status"></p>
+          </div>
+        </div>
+
+        <!-- Shipping Settings -->
+        <div class="admin-subsection">
+          <h3>Shipping Settings</h3>
+          <p class="admin-help-text">
+            These values control the shipping line added at checkout. The flat
+            rate is charged on orders below the free shipping threshold; orders
+            at or above the threshold get free shipping.
+            <br />
+            Be sure this threshold matches your free-shipping rules in Square.
+          </p>
+
+          <div class="admin-form">
+            <label class="admin-label" for="shippingFlatRate">
+              Flat-Rate Shipping ($)
+            </label>
+            <input
+              id="shippingFlatRate"
+              type="number"
+              step="0.01"
+              min="0"
+              class="admin-input"
+              placeholder="Example: 7.99"
+            />
+
+            <label class="admin-label" for="freeShippingThreshold">
+              Free Shipping Threshold ($)
+            </label>
+            <input
+              id="freeShippingThreshold"
+              type="number"
+              step="0.01"
+              min="0"
+              class="admin-input"
+              placeholder="Example: 75.00"
+            />
+
+            <p id="shipping-status" class="admin-status"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Product Flags -->
+      <section class="card admin-section" id="flags-section">
+        <div class="flags-header-row">
+          <h2>Product Flags</h2>
+          <button type="button" id="flags-toggle-btn" class="flags-toggle-btn">
+            Expand Products
+          </button>
+        </div>
+
+        <p class="admin-help-text">
+          Manage which designs are <strong>Pinned to the top</strong>, hidden
+          from the <strong>online shop</strong> or <strong>kiosk</strong>, and
+          which ribbon/tag appears on the product card (New, Featured, Custom).
+        </p>
+
+                <p id="products-status" class="admin-status"></p>
+
+        <div class="flags-body">
+          <!-- Product Flags search / filter controls -->
+          <div class="flags-controls">
+            <input
+              type="text"
+              id="flags-search"
+              class="admin-input"
+              placeholder="Search by name, subcategory…"
+            />
+
+            <select id="flags-filter-subcat" class="admin-input">
+              <option value="">All subcategories</option>
+              <!-- options filled by JS -->
+            </select>
+          </div>
+
+          <div class="table-wrapper products-table-wrapper">
+            <table class="admin-table product-flags-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Subcategory</th>
+                  <th>Total Inventory</th>
+                  <th>Pin to top</th>
+                  <th>Hide shop</th>
+                  <th>Hide kiosk</th>
+                  <th>Ribbon / Tag</th>
+                </tr>
+              </thead>
+              <tbody id="flags-tbody">
+                <tr>
+                  <td colspan="7">Loading products…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="flags-save-bar">
+            <button id="save-flags-btn" type="button" class="btn-primary">
+              Save Product Flags
+            </button>
+            <span id="flags-status" class="admin-status"></span>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- Catalog & Inventory Sync -->
+      <section class="card admin-section" id="sync-section">
+        <h2>Catalog &amp; Inventory Sync</h2>
+        <p class="admin-help-text">
+          If products look out of date after adding or editing items in Square,
+          you can manually trigger a refresh here. The site also refreshes
+          automatically in the background every few minutes.
+        </p>
+
+        <div class="admin-button-row">
+          <button id="btn-sync-catalog" type="button" class="btn-primary">
+            Refresh Catalog + Inventory
+          </button>
+          <button id="btn-sync-inventory" type="button" class="btn-secondary">
+            Refresh Inventory Only
+          </button>
+        </div>
+
+        <p id="sync-status" class="admin-status"></p>
+      </section>
+      <!-- Inventory Management (renamed from Barcode Labels) -->
+      <section class="card admin-section" id="barcode-section">
+        <!-- Header row: title left, pill button right -->
+        <div class="flags-header-row">
+          <h2>Inventory Management</h2>
+          <button
+            type="button"
+            id="barcode-toggle-btn"
+            class="flags-toggle-btn"
+          >
+            Expand Inventory
+          </button>
+        </div>
+
+        <!-- Description ALWAYS visible -->
+        <p class="admin-help-text">
+          Search for products, record your counted quantities, print fresh
+          barcode labels, and send your +/- adjustments straight back to
+          Square so everything stays in sync.
+        </p>
+
+        <!-- Collapsible body -->
+        <div class="barcode-body">
+          <div class="barcode-controls">
+            <input
+              type="text"
+              id="barcode-search"
+              class="admin-input"
+              placeholder="Search by name, SKU, color, size…"
+            />
+
+            <select id="barcode-filter-subcat" class="admin-input">
+              <option value="">All subcategories</option>
+              <!-- options filled by JS -->
+            </select>
+
+            <label class="admin-checkbox">
+              <input type="checkbox" id="barcode-show-zero" />
+              <span>Show zero-stock variants</span>
+            </label>
+
+            <button
+              type="button"
+              id="barcode-refresh-btn"
+              class="btn-secondary"
+            >
+              Refresh from Square
+            </button>
+          </div>
+
+          <p id="barcode-info" class="admin-help-text small"></p>
+
+          <!-- JS will render:
+               - current qty
+               - counted qty
+               - labels to print
+          -->
+          <div id="barcode-products-container"></div>
+
+          <div class="barcode-actions-row">
+            <button
+              type="button"
+              id="barcode-print-selected-btn"
+              class="btn-primary"
+            >
+              Print selected labels
+            </button>
+
+            <!-- Send counts to Square -->
+            <button
+              type="button"
+              id="barcode-apply-inventory-btn"
+              class="btn-secondary"
+            >
+              Send counts to Square
+            </button>
+
+            <!-- Output options -->
+            <label class="admin-checkbox barcode-print-option">
+              <input type="checkbox" id="barcode-print-to-label" checked />
+              <span>Print to label printer</span>
+            </label>
+
+            <span id="barcode-status" class="admin-status"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Orders Card (collapsible) -->
+      <section class="card admin-section" id="orders-section">
+        <!-- Header row: title left, pill button right -->
+        <div class="flags-header-row">
+          <h2>Recent Orders</h2>
+          <button
+            type="button"
+            id="orders-toggle-btn"
+            class="flags-toggle-btn"
+          >
+            Expand Orders
+          </button>
+        </div>
+
+        <!-- Description ALWAYS visible -->
+        <p class="admin-help-text">
+          Quick view of recent orders created from your website checkout. You
+          can update status, add tracking, and mark an order as
+          <strong>ARCHIVED</strong> once it’s completed. Archived orders are
+          removed from this list and moved into the downloadable archive.
+        </p>
+
+        <!-- Collapsible body -->
+        <div class="orders-body">
+          <div class="admin-orders-controls">
+            <button id="refresh-orders" class="btn-secondary">
+              Refresh Orders
+            </button>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="admin-table" id="orders-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Customer</th>
+                  <th>Total</th>
+                  <th>Status</th>
+                  <th>Tracking #</th>
+                  <th>Packing List</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="orders-tbody">
+                <tr>
+                  <td colspan="7">Loading orders…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- Order Archive Download Section -->
+      <section class="card admin-section">
+        <h2>Order Archive Download</h2>
+        <p class="admin-help-text">
+          When you mark orders as <strong>ARCHIVED</strong>, they are moved into
+          an archive folder on the server. Use this button to download a ZIP
+          file containing all archived orders and permanently clear them from
+          the online server to save space.
+        </p>
+
+        <button id="archive-current-month" class="btn-secondary">
+          Download Orders Archive
+        </button>
+
+        <p id="archive-status" class="admin-status"></p>
+      </section>
+
+
+    <script src="config-admin.js"></script>
+    <script src="admin.js"></script>
+  </body>
+</html>

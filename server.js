@@ -570,6 +570,22 @@ const PORT = process.env.PORT || 3000;
 
 // Serve static admin assets (HTML/CSS/JS) from ./public
 app.use(express.static(path.join(__dirname, "public")));
+// Explicit admin page routes (belt-and-suspenders)
+app.get("/admin-login.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "admin-login.html"));
+});
+
+app.get("/admin-login", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "admin-login.html"));
+});
+
+app.get("/admin.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "admin.html"));
+});
+
+app.get("/admin", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "admin.html"));
+});
 
 // ===== Render / proxy awareness (HTTPS cookies, etc.) =====
 const IS_RENDER = !!process.env.RENDER;
