@@ -53,31 +53,100 @@ try {
 const INCH = 72;
 const LABEL_WIDTH_2x1 = 2 * INCH;
 const LABEL_HEIGHT_2x1 = 1 * INCH;
-// Helper: build TSPL for a single 2x1 label item
+
+// Small helper: break a string into chunks of up to maxChars (word-friendly)
+function wrapLabelText(text, maxChars) {
+  const words = (text || "").split(/\s+/);
+  const lines = [];
+  let current = "";
+
+  for (const w of words) {
+    if (!w) continue;
+    if ((current + " " + w).trim().length > maxChars) {
+      if (current) lines.push(current.trim());
+      current = w;
+    } else {
+      current = current ? current + " " + w : w;
+    }
+  }
+  if (current) lines.push(current.trim());
+  return lines;
+}
+
+// Helper: build TSPL for a single 2x1 label item (aligned for GAP 3mm labels)
 function buildTsplForItem(sku, labelText, quantity) {
-  // quantity = how many labels to print for this item
-  const safeSku = sku || "";
-  const safeLabel = labelText || "";
+  const safeSku = (sku || "").replace(/"/g, "'");
+  const safeLabel = (labelText || "").replace(/"/g, "'");
+
+  // Use more characters per line to utilize the extra width,
+  // and allow up to 3 lines of wrapped text.
+  const wrapped = wrapLabelText(safeLabel, 24).slice(0, 3);
+
+  // We moved everything UP ≈6mm earlier.
+  // TSPL uses 8 dots per mm → 6mm * 8 = 48 dots.
+  // "Up" = *smaller* Y.
+  const SHIFT_UP = -48; // negative means move toward the top of the label
+
+  // Original positions (for reference):
+  //   BARCODE  y: 20
+  //   SKU text y: 120
+  //   DESC1    y: 150
+  //   DESC2    y: 175
+  //
+  // We'll keep barcode + SKU the same, and stack up to 3 description lines.
+  const BARCODE_Y  = 20  + SHIFT_UP; // 20 - 48 = -28 (printer clamps near top)
+  const SKU_TEXT_Y = 120 + SHIFT_UP; // 72
+
+  // Shift text slightly left to gain a bit more horizontal room
+  const DESC_X     = 30;             // was 40
+  const DESC1_Y    = 150 + SHIFT_UP; // 102
+  const DESC2_Y    = 175 + SHIFT_UP; // 127
+  const DESC3_Y    = 200 + SHIFT_UP; // 152 (still inside 25mm ≈ 200 dots)
 
   const tsplLines = [
-    // 2" wide (~50mm) x ~1" tall
+    // 2" wide (~50mm) x 1" tall (25mm) with a 3mm gap
     "SIZE 50 mm,25 mm",
-    // For your continuous test roll; when you get real 2x1 labels,
-    // change this to: GAP 3 mm,0 mm
-    "GAP 0 mm,0 mm",
+    "GAP 3 mm,0 mm",
+    "DIRECTION 1",
     "CLS",
-    // Big, centered-ish barcode (same as our tuned test route)
-    `BARCODE 40,20,"128",90,0,0,3,6,"${safeSku}"`,
+
+    // Big barcode – shifted upward
+    `BARCODE 40,${BARCODE_Y},"128",90,0,0,3,6,"${safeSku}"`,
+
     // SKU text under barcode
-    `TEXT 80,120,"3",0,1,1,"${safeSku}"`,
-    // Description below that
-    `TEXT 40,150,"3",0,1,1,"${safeLabel}"`,
-    // print N copies of this label
-    `PRINT 1,${Number(quantity) || 1}`
+    `TEXT 80,${SKU_TEXT_Y},"3",0,1,1,"${safeSku}"`,
   ];
+
+  // First description line
+  if (wrapped[0]) {
+    tsplLines.push(
+      `TEXT ${DESC_X},${DESC1_Y},"3",0,1,1,"${wrapped[0]}"`
+    );
+  }
+
+  // Second description line
+  if (wrapped[1]) {
+    tsplLines.push(
+      `TEXT ${DESC_X},${DESC2_Y},"3",0,1,1,"${wrapped[1]}"`
+    );
+  }
+
+  // Third description line (new)
+  if (wrapped[2]) {
+    tsplLines.push(
+      `TEXT ${DESC_X},${DESC3_Y},"3",0,1,1,"${wrapped[2]}"`
+    );
+  }
+
+  // Print N copies of this label
+  tsplLines.push(`PRINT 1,${Number(quantity) || 1}`);
 
   return tsplLines.join("\r\n") + "\r\n";
 }
+
+
+
+
 
 // ===== EMAIL CONFIG & HELPERS =====
 const {
@@ -2710,138 +2779,119 @@ app.post("/admin/generate-barcodes", async (req, res) => {
       return res.status(400).json({ error: "No items provided." });
     }
 
-    // Normalize mode
-    // default: "pdf" so your old curl still works without changes
     const modeNormalized = (mode || "pdf").toLowerCase();
-
     const doPrint = modeNormalized === "print" || modeNormalized === "both";
     const doPdf = modeNormalized === "pdf" || modeNormalized === "both";
 
-    // --- PRINT MODE (Bluetooth TSPL via COM3) ---
-    if (doPrint) {
-      console.log(">>> /admin/generate-barcodes: PRINT mode");
+    // -------------------------------------
+    // ⭐ BUILD ONE BIG TSPL BATCH FOR PRINT
+    // -------------------------------------
+    let fullBatchTspl = "";
 
-      // Print each item sequentially so we don't hammer the COM port
+    if (doPrint) {
+      console.log(">>> /admin/generate-barcodes: PRINT mode (batch)");
+
       for (const item of items) {
         const sku = item.sku || "";
         const labelText = item.labelText || "";
-        const quantity = item.quantity || 1;
+        const qty = Number(item.quantity) || 1;
 
-        const tspl = buildTsplForItem(sku, labelText, quantity);
-        console.log(`Sending TSPL for SKU=${sku}, qty=${quantity}`);
-        await sendToPrinter(tspl);
+        if (!qty || qty <= 0) continue;
+
+        console.log(`Adding SKU=${sku}, qty=${qty} to batch`);
+
+        // Uses your updated 2x1 TSPL builder with GAP 3mm
+        const tspl = buildTsplForItem(sku, labelText, qty);
+        fullBatchTspl += tspl;
       }
 
-      console.log(">>> All print jobs sent.");
+      if (!fullBatchTspl.trim()) {
+        return res.status(400).json({
+          error: "Nothing to print (no labels with qty > 0).",
+        });
+      }
+
+      console.log("Opening COM3 once and sending full batch...");
+      await sendToPrinter(fullBatchTspl);
+      console.log("COM3 batch print complete.");
     }
 
-        // --- PDF MODE (2x1 label style, with real barcode) ---
+    // -------------------------------------
+    // ⭐ PDF MODE (unchanged)
+    // -------------------------------------
     if (doPdf) {
       console.log(">>> /admin/generate-barcodes: PDF mode");
 
       if (!PDFDocument) {
-        console.error("PDFKit not available on this server.");
         return res
           .status(500)
           .json({ error: "PDF generation not available on this server." });
       }
 
-      // Headers for PDF download
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
         'attachment; filename="labels.pdf"'
       );
 
-      // We'll create pages manually so we can do 1 label per page
       const doc = new PDFDocument({ autoFirstPage: false, margin: 36 });
       doc.pipe(res);
 
-      // For each item, create `quantity` labels
       for (const item of items) {
         const sku = item.sku || "";
         const labelText = item.labelText || "";
-        const quantity = Number(item.quantity) || 1;
+        const qty = Number(item.quantity) || 1;
 
-        for (let i = 0; i < quantity; i++) {
-          // New page per label
+        for (let i = 0; i < qty; i++) {
           doc.addPage({ size: "LETTER", margin: 36 });
 
           const pageWidth = doc.page.width;
           const pageHeight = doc.page.height;
 
-          // Our 2x1" label area (in PDF points: 72pt per inch)
-          const labelWidth = LABEL_WIDTH_2x1;   // 2" wide
-          const labelHeight = LABEL_HEIGHT_2x1; // 1" tall
+          const x = (pageWidth - LABEL_WIDTH_2x1) / 2;
+          const y = (pageHeight - LABEL_HEIGHT_2x1) / 2;
 
-          // Center the label on the page
-          const x = (pageWidth - labelWidth) / 2;
-          const y = (pageHeight - labelHeight) / 2;
-
-          // Draw a light border so you can see the label outline
           doc
             .lineWidth(0.5)
-            .roundedRect(x, y, labelWidth, labelHeight, 4)
+            .roundedRect(x, y, LABEL_WIDTH_2x1, LABEL_HEIGHT_2x1, 4)
             .stroke();
 
           let currentY = y + 6;
 
-          // --- BARCODE IMAGE (using bwip-js if available) ---
           if (bwipjs) {
             try {
               const barcodeBuffer = await bwipjs.toBuffer({
                 bcid: "code128",
-                text: sku || "",
-                scale: 2.5,   // thickness of bars
-                height: 10,   // bar height in "mm-like" units
+                text: sku,
+                scale: 2.5,
+                height: 10,
                 includetext: false,
               });
 
-              // Leave a little margin inside label
-              const barcodeWidth = labelWidth - 16;
               doc.image(barcodeBuffer, x + 8, currentY, {
-                width: barcodeWidth,
+                width: LABEL_WIDTH_2x1 - 16,
               });
 
-              // Move down roughly barcode height + padding
               currentY += 40;
             } catch (err) {
-              console.warn("bwip-js failed for PDF label – falling back:", err);
-              doc
-                .fontSize(9)
-                .text(`|| ${sku} ||`, x + 8, currentY, {
-                  width: labelWidth - 16,
-                  align: "center",
-                });
-              currentY += 18;
-            }
-          } else {
-            // Fallback if bwip-js is not available
-            doc
-              .fontSize(9)
-              .text(`|| ${sku} ||`, x + 8, currentY, {
-                width: labelWidth - 16,
+              doc.fontSize(9).text(`|| ${sku} ||`, x + 8, currentY, {
+                width: LABEL_WIDTH_2x1 - 16,
                 align: "center",
               });
-            currentY += 18;
+              currentY += 18;
+            }
           }
 
-          // --- SKU text ---
-          doc
-            .fontSize(10)
-            .text(sku, x + 8, currentY, {
-              width: labelWidth - 16,
-              align: "center",
-            });
+          doc.fontSize(10).text(sku, x + 8, currentY, {
+            width: LABEL_WIDTH_2x1 - 16,
+            align: "center",
+          });
           currentY += 14;
 
-          // --- Description text ---
-          doc
-            .fontSize(8)
-            .text(labelText, x + 8, currentY, {
-              width: labelWidth - 16,
-              align: "center",
-            });
+          doc.fontSize(8).text(labelText, x + 8, currentY, {
+            width: LABEL_WIDTH_2x1 - 16,
+            align: "center",
+          });
         }
       }
 
@@ -2849,18 +2899,19 @@ app.post("/admin/generate-barcodes", async (req, res) => {
       return;
     }
 
-
-    // If we got here, we did PRINT but no PDF
+    // PRINT only
     return res.json({
       ok: true,
-      message: "Labels processed.",
+      message: "Labels processed (print batch complete).",
       mode: modeNormalized,
     });
+
   } catch (err) {
     console.error("Error in /admin/generate-barcodes:", err);
     res.status(500).json({ error: "Failed to generate barcodes." });
   }
 });
+
 
 
 //
@@ -2954,7 +3005,7 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
 });
 
 
-// ========== ADMIN: TEST BARCODE PRINT (2x1 label, tuned v3) ==========
+// ========== ADMIN: TEST BARCODE PRINT (2x1 label, tuned +6mm upward) ==========
 app.all("/admin/print-barcode-test", async (req, res) => {
   try {
     console.log(">>> /admin/print-barcode-test HIT via", req.method);
@@ -2963,27 +3014,35 @@ app.all("/admin/print-barcode-test", async (req, res) => {
     const labelText = "Jazz Tee - Red XL";
     const quantity = 1; // one per click
 
-    // 2" wide (~50mm), a bit taller so we have room for text
+    // ORIGINAL Y positions:
+    // BARCODE_Y = 30
+    // SKU_TEXT_Y = 115
+    // DESC1_Y   = 145
+    //
+    // SHIFT UPWARD BY +48 DOTS (≈6 mm)
+    const SHIFT = 48;
+
+    const BARCODE_Y  = 30  + SHIFT;   // becomes 78
+    const SKU_TEXT_Y = 115 + SHIFT;   // becomes 163
+    const DESC1_Y    = 145 + SHIFT;   // becomes 193
+
     const tsplLines = [
-      "SIZE 50 mm,25 mm",   // was 20 mm tall; now 25 mm (~1")
-      // Continuous paper for now; switch to GAP 3mm,0mm with real 2x1 labels
-      "GAP 0 mm,0 mm",
+      // 2" wide (~50mm) x 1" tall (25mm) with 3mm gap between labels
+      "SIZE 50 mm,25 mm",
+      "GAP 3 mm,0 mm",
+      "DIRECTION 1",
       "CLS",
 
-      // Bigger, centered-ish barcode:
-      // 50mm wide label ≈ 400 dots; x=40 is a decent inset
-      // height=90 so it doesn't eat all vertical space
-      // readable=0 so only our TEXT shows the SKU
-      `BARCODE 40,20,"128",90,0,0,3,6,"${sku}"`,
+      // Barcode (shifted up 6mm)
+      `BARCODE 40,${BARCODE_Y},"128",90,0,0,3,6,"${sku}"`,
 
-      // SKU text under barcode (try to center-ish)
-      // y=120 should be safely below the barcode
-      `TEXT 80,120,"3",0,1,1,"${sku}"`,
+      // SKU text just under barcode (shifted up 6mm)
+      `TEXT 80,${SKU_TEXT_Y},"3",0,1,1,"${sku}"`,
 
-      // Description below that, slightly left-aligned so it fits
-      // y=150 is safely inside 25mm (≈200 dots)
-      `TEXT 40,150,"3",0,1,1,"${labelText}"`,
+      // Description (shifted up 6mm)
+      `TEXT 40,${DESC1_Y},"3",0,1,1,"${labelText}"`,
 
+      // Print N copies of this single label
       `PRINT 1,${quantity}`
     ];
 
@@ -2998,6 +3057,8 @@ app.all("/admin/print-barcode-test", async (req, res) => {
     res.status(500).json({ error: "Failed to send test barcode to printer." });
   }
 });
+
+
 
 
 

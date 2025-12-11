@@ -689,3 +689,7 @@ body.admin .btn-secondary:hover {
 .spc-alert-button:hover {
   background: #7c1d72;
 }
+.scan-highlight {
+  background-color: #fff5c4; /* pale yellow flash */
+  transition: background-color 0.25s ease-out;
+}

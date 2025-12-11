@@ -57,15 +57,20 @@
 
           <p id="banner-status" class="admin-status"></p>
         </form>
-<section class="admin-section">
-  <h2>Session Timeout</h2>
 
-  <label class="admin-checkbox">
-    <input type="checkbox" id="extend-timeout-toggle" />
-    Keep me logged in longer while doing inventory / barcode work (4-hour timeout)
-  </label>
-  </p>
-</section>
+        <!-- Session timeout -->
+        <section class="admin-section">
+          <h2>Session Timeout</h2>
+
+          <label class="admin-checkbox">
+            <input type="checkbox" id="extend-timeout-toggle" />
+            <span>
+              Keep me logged in longer while doing inventory / barcode work
+              (4-hour timeout)
+            </span>
+          </label>
+        </section>
+
         <!-- Shop Splash / Popup Controls -->
         <div class="admin-subsection">
           <h3>Shop Splash / Popup</h3>
@@ -161,7 +166,7 @@
           which ribbon/tag appears on the product card (New, Featured, Custom).
         </p>
 
-                <p id="products-status" class="admin-status"></p>
+        <p id="products-status" class="admin-status"></p>
 
         <div class="flags-body">
           <!-- Product Flags search / filter controls -->
@@ -209,7 +214,6 @@
         </div>
       </section>
 
-
       <!-- Catalog & Inventory Sync -->
       <section class="card admin-section" id="sync-section">
         <h2>Catalog &amp; Inventory Sync</h2>
@@ -230,7 +234,8 @@
 
         <p id="sync-status" class="admin-status"></p>
       </section>
-      <!-- Inventory Management (renamed from Barcode Labels) -->
+
+      <!-- Inventory Management (Barcode + Scan to Count) -->
       <section class="card admin-section" id="barcode-section">
         <!-- Header row: title left, pill button right -->
         <div class="flags-header-row">
@@ -249,6 +254,10 @@
           Search for products, record your counted quantities, print fresh
           barcode labels, and send your +/- adjustments straight back to
           Square so everything stays in sync.
+          <br />
+          <strong>Tip:</strong> Use the scan-to-count box below with your
+          Bluetooth barcode scanner. Each scan will add +1 to the
+          <strong>Counted qty</strong> for that SKU.
         </p>
 
         <!-- Collapsible body -->
@@ -280,7 +289,28 @@
             </button>
           </div>
 
-          <p id="barcode-info" class="admin-help-text small"></p>
+          <!-- Scan-to-count row -->
+          <div class="scan-row">
+            <label class="admin-label" for="barcode-scan-input">
+              Scan-to-count box (Bluetooth scanner)
+            </label>
+
+            <input
+              type="text"
+              id="barcode-scan-input"
+              class="admin-input scan-buffer-input"
+              autocomplete="off"
+              placeholder="Click here once, then just start scanning…"
+            />
+
+            <p id="scan-status" class="admin-status small"></p>
+          </div>
+
+          <p id="barcode-info" class="admin-help-text small">
+            To print labels, check the rows you want under <strong>Select</strong>
+            and set a number under <strong>Labels to print</strong>. Scan-to-count
+            only affects the <strong>Counted qty</strong> column.
+          </p>
 
           <!-- JS will render:
                - current qty
@@ -312,6 +342,14 @@
               <input type="checkbox" id="barcode-print-to-label" checked />
               <span>Print to label printer</span>
             </label>
+
+            <!-- (Optional future) PDF checkbox, referenced in JS but not required -->
+            <!--
+            <label class="admin-checkbox barcode-print-option">
+              <input type="checkbox" id="barcode-download-pdf" />
+              <span>Download PDF instead</span>
+            </label>
+            -->
 
             <span id="barcode-status" class="admin-status"></span>
           </div>
@@ -371,7 +409,6 @@
         </div>
       </section>
 
-
       <!-- Order Archive Download Section -->
       <section class="card admin-section">
         <h2>Order Archive Download</h2>
@@ -388,7 +425,7 @@
 
         <p id="archive-status" class="admin-status"></p>
       </section>
-
+    </main>
 
     <script src="config-admin.js"></script>
     <script src="admin.js"></script>

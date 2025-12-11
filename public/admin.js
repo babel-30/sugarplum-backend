@@ -1,4 +1,4 @@
-// admin.js 
+// admin.js  
 // Assumes API_BASE is defined in config.js
 
 // Helper: always send session cookies to the backend for admin routes
@@ -106,6 +106,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const barcodeProductsContainer = document.getElementById(
     "barcode-products-container"
   );
+  // NEW: dedicated scan display/input box at top of barcode section
+  const barcodeScanInput = document.getElementById("barcode-scan-input");
 
   // Delegate clicks inside the barcode products container (expand/collapse, check-all)
   if (barcodeProductsContainer) {
@@ -208,6 +210,57 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // We keep the latest products from /admin/barcode-products here
   let barcodeProductsRaw = [];
+
+  // Scan-based counted qty per SKU (delta to send to Square)
+  const scanCountsBySku = {};
+
+  // Quick lookup: scanned code (barcode or SKU) -> canonical SKU
+  let scanSkuIndex = {};
+
+  function rebuildScanSkuIndex() {
+    scanSkuIndex = {};
+    (barcodeProductsRaw || []).forEach((p) => {
+      const vars = Array.isArray(p.variations) ? p.variations : [];
+      vars.forEach((v) => {
+        if (!v) return;
+        const sku = v.sku || "";
+        if (sku) {
+          scanSkuIndex[sku] = sku;
+        }
+        // If backend ever gives a separate barcode/UPC, map that too
+        const barcode = v.barcode || v.upc || v.barcodeValue;
+        if (barcode) {
+          scanSkuIndex[barcode] = sku || barcode;
+        }
+      });
+    });
+  }
+
+  function resolveSkuFromScan(codeRaw) {
+    const raw = (codeRaw || "").trim();
+    if (!raw) return null;
+
+    if (!barcodeProductsRaw || !barcodeProductsRaw.length) {
+      return null;
+    }
+
+    // 1) Fast direct lookup from the index (handles both SKU + barcode)
+    if (scanSkuIndex[raw]) {
+      return scanSkuIndex[raw];
+    }
+
+    // 2) Fallback scan if index somehow missed it
+    for (const p of barcodeProductsRaw) {
+      const vars = Array.isArray(p.variations) ? p.variations : [];
+      for (const v of vars) {
+        if (v && typeof v.sku === "string" && v.sku === raw) {
+          return v.sku;
+        }
+      }
+    }
+
+    return null;
+  }
 
   // =======================
   //  HELPERS
@@ -844,44 +897,123 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Apply scanCountsBySku to any rendered rows
+  function applyScanCountsToDom() {
+    if (!barcodeProductsContainer) return;
+
+    const rows = barcodeProductsContainer.querySelectorAll(
+      ".barcode-variant-row"
+    );
+
+    rows.forEach((row) => {
+      const sku = row.getAttribute("data-sku");
+      if (!sku) return;
+
+      const val = scanCountsBySku[sku];
+      if (
+        typeof val === "number" &&
+        Number.isFinite(val) &&
+        val !== 0
+      ) {
+        const input = row.querySelector(".inv-count-input");
+        if (input) {
+          input.value = String(val);
+        }
+      }
+    });
+  }
+
+  // Increment in-memory count for a SKU and update its row if visible
+  function bumpScanCountForSku(sku) {
+    if (!sku) return 0;
+
+    const current = Number(scanCountsBySku[sku] || 0);
+    const nextVal = Number.isFinite(current) ? current + 1 : 1;
+    scanCountsBySku[sku] = nextVal;
+
+    if (barcodeProductsContainer) {
+      const selectorSku =
+        typeof CSS !== "undefined" && CSS.escape
+          ? `.barcode-variant-row[data-sku="${CSS.escape(sku)}"]`
+          : `.barcode-variant-row[data-sku="${sku}"]`;
+
+      const row = barcodeProductsContainer.querySelector(selectorSku);
+      if (row) {
+        const input = row.querySelector(".inv-count-input");
+        if (input) {
+          input.value = String(nextVal);
+        }
+
+        // brief highlight flash
+        row.classList.add("scan-highlight");
+        setTimeout(() => {
+          row.classList.remove("scan-highlight");
+        }, 250);
+      }
+    }
+
+    return nextVal;
+  }
+
   // =======================
   //  BARCODE LABELS / INVENTORY
   // =======================
-  function renderBarcodeProducts(products) {
-    if (!barcodeProductsContainer) return;
+function renderBarcodeProducts(products) {
+  if (!barcodeProductsContainer) return;
 
-    if (!Array.isArray(products) || products.length === 0) {
-      barcodeProductsContainer.innerHTML =
-        "<p>No products found for the current filters.</p>";
-      return;
-    }
+  if (!Array.isArray(products) || products.length === 0) {
+    barcodeProductsContainer.innerHTML =
+      "<p>No products found for the current filters.</p>";
+    return;
+  }
 
-    const html = products
-      .map((p) => {
-        const safeName = escapeHtml(p.name || "Unnamed product");
-        const safeSubcat = escapeHtml(p.subcategory || "");
-        const variations = Array.isArray(p.variations) ? p.variations : [];
+  const html = products
+    .map((p) => {
+      const safeName = escapeHtml(p.name || "Unnamed product");
+      const safeSubcat = escapeHtml(p.subcategory || "");
 
-        if (!variations.length) {
-          return "";
-        }
+      // Make a copy and sort variations alphabetically:
+      // Variant name -> color -> size -> SKU
+      const variations = Array.isArray(p.variations)
+        ? [...p.variations].sort((a, b) => {
+            const nameA = (a.name || "").toLowerCase();
+            const nameB = (b.name || "").toLowerCase();
+            if (nameA !== nameB) return nameA.localeCompare(nameB);
 
-        const varsHtml = variations
-          .map((v) => {
-            const sku = v.sku || "";
-            const safeSku = escapeHtml(sku);
-            const vName = v.name || "";
-            const safeVName = escapeHtml(vName);
-            const color = v.color || "";
-            const size = v.size || "";
-            const safeColor = escapeHtml(color);
-            const safeSize = escapeHtml(size);
-            const qty =
-              typeof v.quantity === "number" && !Number.isNaN(v.quantity)
-                ? v.quantity
-                : 0;
+            const colorA = (a.color || "").toLowerCase();
+            const colorB = (b.color || "").toLowerCase();
+            if (colorA !== colorB) return colorA.localeCompare(colorB);
 
-            return `
+            const sizeA = (a.size || "").toLowerCase();
+            const sizeB = (b.size || "").toLowerCase();
+            if (sizeA !== sizeB) return sizeA.localeCompare(sizeB);
+
+            const skuA = (a.sku || "").toLowerCase();
+            const skuB = (b.sku || "").toLowerCase();
+            return skuA.localeCompare(skuB);
+          })
+        : [];
+
+      if (!variations.length) {
+        return "";
+      }
+
+      const varsHtml = variations
+        .map((v) => {
+          const sku = v.sku || "";
+          const safeSku = escapeHtml(sku);
+          const vName = v.name || "";
+          const safeVName = escapeHtml(vName);
+          const color = v.color || "";
+          const size = v.size || "";
+          const safeColor = escapeHtml(color);
+          const safeSize = escapeHtml(size);
+          const qty =
+            typeof v.quantity === "number" && !Number.isNaN(v.quantity)
+              ? v.quantity
+              : 0;
+
+          return `
             <tr
               class="barcode-variant-row"
               data-sku="${safeSku}"
@@ -918,12 +1050,12 @@ document.addEventListener("DOMContentLoaded", () => {
               </td>
             </tr>
           `;
-          })
-          .join("");
+        })
+        .join("");
 
-        if (!varsHtml) return "";
+      if (!varsHtml) return "";
 
-        return `
+      return `
         <div class="barcode-product" data-product-id="${p.id}">
           <div class="barcode-product-header">
             <button type="button" class="barcode-toggle" aria-label="Toggle variants">
@@ -963,78 +1095,94 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>
         </div>
       `;
-      })
-      .join("");
+    })
+    .join("");
 
-    barcodeProductsContainer.innerHTML = html || "<p>No products found.</p>";
-  }
+  barcodeProductsContainer.innerHTML = html || "<p>No products found.</p>";
 
-  function applyBarcodeFiltersAndRender() {
-    if (!barcodeProductsContainer) return;
+  // Re-apply any existing scan counts when we re-render (filters, refresh, etc.)
+  applyScanCountsToDom();
+}
 
-    const query = (barcodeSearchInput?.value || "").trim().toLowerCase();
-    const showZero = barcodeShowZeroCheckbox
-      ? barcodeShowZeroCheckbox.checked
-      : true;
-    const subcatFilter = (barcodeSubcatFilter?.value || "")
-      .trim()
-      .toLowerCase();
 
-    const filteredProducts = (barcodeProductsRaw || [])
-      .map((p) => {
-        const baseMatchesName =
-          !query ||
-          (p.name && p.name.toLowerCase().includes(query));
-        const baseMatchesSubcat =
-          !query ||
-          (p.subcategory && p.subcategory.toLowerCase().includes(query));
+function applyBarcodeFiltersAndRender() {
+  if (!barcodeProductsContainer) return;
 
-        const baseMatchesSubcatFilter =
-          !subcatFilter ||
-          (p.subcategory && p.subcategory.toLowerCase() === subcatFilter);
+  const query = (barcodeSearchInput?.value || "").trim().toLowerCase();
+  const showZero = barcodeShowZeroCheckbox
+    ? barcodeShowZeroCheckbox.checked
+    : true;
+  const subcatFilter = (barcodeSubcatFilter?.value || "")
+    .trim()
+    .toLowerCase();
 
-        const variations = Array.isArray(p.variations) ? p.variations : [];
+  const filteredProducts = (barcodeProductsRaw || [])
+    .map((p) => {
+      const baseMatchesName =
+        !query ||
+        (p.name && p.name.toLowerCase().includes(query));
+      const baseMatchesSubcat =
+        !query ||
+        (p.subcategory && p.subcategory.toLowerCase().includes(query));
 
-        const filteredVars = variations.filter((v) => {
-          const vName = (v.name || "").toLowerCase();
-          const vSku = (v.sku || "").toLowerCase();
-          const vColor = (v.color || "").toLowerCase();
-          const vSize = (v.size || "").toLowerCase();
+      const baseMatchesSubcatFilter =
+        !subcatFilter ||
+        (p.subcategory && p.subcategory.toLowerCase() === subcatFilter);
 
-          const searchMatches =
-            (!query ||
-              baseMatchesName ||
-              baseMatchesSubcat ||
-              vName.includes(query) ||
-              vSku.includes(query) ||
-              vColor.includes(query) ||
-              vSize.includes(query)) &&
-            baseMatchesSubcatFilter;
+      const variations = Array.isArray(p.variations) ? p.variations : [];
 
-          if (!searchMatches) return false;
+      const filteredVars = variations.filter((v) => {
+        const vName = (v.name || "").toLowerCase();
+        const vSku = (v.sku || "").toLowerCase();
+        const vColor = (v.color || "").toLowerCase();
+        const vSize = (v.size || "").toLowerCase();
 
-          if (!showZero) {
-            const qty =
-              typeof v.quantity === "number" && !Number.isNaN(v.quantity)
-                ? v.quantity
-                : 0;
-            if (qty <= 0) return false;
-          }
+        const searchMatches =
+          (!query ||
+            baseMatchesName ||
+            baseMatchesSubcat ||
+            vName.includes(query) ||
+            vSku.includes(query) ||
+            vColor.includes(query) ||
+            vSize.includes(query)) &&
+          baseMatchesSubcatFilter;
 
-          return true;
-        });
+        if (!searchMatches) return false;
 
-        if (!filteredVars.length) return null;
+        if (!showZero) {
+          const qty =
+            typeof v.quantity === "number" && !Number.isNaN(v.quantity)
+              ? v.quantity
+              : 0;
+          if (qty <= 0) return false;
+        }
 
-        return {
-          ...p,
-          variations: filteredVars,
-        };
-      })
-      .filter(Boolean);
+        return true;
+      });
 
-    renderBarcodeProducts(filteredProducts);
-  }
+      if (!filteredVars.length) return null;
+
+      return {
+        ...p,
+        variations: filteredVars,
+      };
+    })
+    .filter(Boolean);
+
+  // NEW: sort products by subcategory then name (both A–Z)
+  const sortedProducts = filteredProducts.sort((a, b) => {
+    const subA = (a.subcategory || "").toLowerCase();
+    const subB = (b.subcategory || "").toLowerCase();
+    if (subA !== subB) return subA.localeCompare(subB);
+
+    const nameA = (a.name || "").toLowerCase();
+    const nameB = (b.name || "").toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
+  renderBarcodeProducts(sortedProducts);
+}
+
 
   async function loadBarcodeProducts() {
     if (!barcodeProductsContainer) return;
@@ -1065,6 +1213,9 @@ document.addEventListener("DOMContentLoaded", () => {
         ? data.products
         : [];
       console.log("Loaded barcode products:", barcodeProductsRaw);
+
+      // Build scan lookup index whenever we refresh products
+      rebuildScanSkuIndex();
 
       // Build subcategory dropdown options
       if (barcodeSubcatFilter) {
@@ -1206,6 +1357,95 @@ document.addEventListener("DOMContentLoaded", () => {
       );
     }
   }
+
+  // =======================
+  //  BARCODE SCAN → COUNTED QTY (works even when row not visible)
+  // =======================
+  (function initBarcodeScanToCount() {
+    // We always listen globally so you can scan anywhere on the page
+    let scanBuffer = "";
+    let lastEventTime = 0;
+    const SCAN_RESET_MS = 120; // if gap between chars is bigger, start a new code
+
+    function isTypingInInput(el) {
+      if (!el || !el.tagName) return false;
+
+      // Allow using the dedicated scan input without blocking the scanner logic
+      if (barcodeScanInput && el === barcodeScanInput) {
+        return false;
+      }
+
+      const tag = el.tagName.toLowerCase();
+      if (tag === "textarea") return true;
+      if (tag !== "input") return false;
+      const type = (el.getAttribute("type") || "").toLowerCase();
+      return (
+        type === "text" ||
+        type === "number" ||
+        type === "search" ||
+        type === "email" ||
+        type === "tel"
+      );
+    }
+
+    function handleScanComplete(codeRaw) {
+      const raw = (codeRaw || "").trim();
+      if (!raw) return;
+
+      const sku = resolveSkuFromScan(raw);
+      if (!sku) {
+        showStatus(
+          barcodeStatusEl,
+          `Scanned "${raw}" but it doesn't match any SKU in the current list.`,
+          true
+        );
+        return;
+      }
+
+      const nextVal = bumpScanCountForSku(sku);
+
+      showStatus(
+        barcodeStatusEl,
+        `Scanned ${raw} \u2192 SKU ${sku} — counted qty now ${nextVal}`,
+        false
+      );
+    }
+
+    function handleKeydown(e) {
+      // Let normal typing into other inputs work as usual
+      if (isTypingInInput(e.target)) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastEventTime > SCAN_RESET_MS) {
+        scanBuffer = "";
+        if (barcodeScanInput) barcodeScanInput.value = "";
+      }
+      lastEventTime = now;
+
+      if (e.key === "Enter") {
+        const code = scanBuffer;
+        scanBuffer = "";
+        if (barcodeScanInput) barcodeScanInput.value = "";
+        if (code) {
+          e.preventDefault();
+          handleScanComplete(code);
+        }
+        return;
+      }
+
+      // Only collect printable single-character keys
+      if (e.key && e.key.length === 1) {
+        scanBuffer += e.key;
+        if (barcodeScanInput) {
+          barcodeScanInput.value = scanBuffer;
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeydown);
+  })();
 
   // =======================
   //  RETURN TO TOP BUTTON
