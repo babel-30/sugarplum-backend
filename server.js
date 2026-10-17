@@ -1,40 +1,46 @@
-// Load environment variables   
+// Load environment variables
 require("dotenv").config();
 
-// ===== DEBUG ENV KEYS FOR SQUARE / RENDER =====
-console.log("DEBUG NODE_ENV:", process.env.NODE_ENV);
-console.log(
-  "DEBUG SQUARE env keys:",
-  Object.keys(process.env).filter((k) => k.includes("SQUARE"))
-);
-if (process.env.SQUARE_ACCESS_TOKEN) {
-  console.log(
-    "DEBUG SQUARE_ACCESS_TOKEN present, length:",
-    process.env.SQUARE_ACCESS_TOKEN.length
-  );
-} else {
-  console.log("DEBUG SQUARE_ACCESS_TOKEN is MISSING at process.env level");
+// SAFE_LOGGING_BEGIN
+// SDK ApiErrors contain request authorization headers. Never print their raw objects.
+function safeLogValue(value) {
+  const redact = input => {
+    let text=String(input);
+    for (const key of ['SQUARE_ACCESS_TOKEN','SMTP_PASS','ADMIN_PASSWORD','SESSION_SECRET','SQUARE_WEBHOOK_SIGNATURE_KEY']) {
+      const secret=process.env[key];if(secret)text=text.split(secret).join('[redacted]');
+    }
+    return text.replace(/Bearer\s+[^\s'",}]+/gi,'Bearer [redacted]');
+  };
+  if(value&&typeof value==='object'){
+    const issues=Array.isArray(value.errors)?value.errors:Array.isArray(value.result?.errors)?value.result.errors:[];
+    return {name:redact(value.name||'Error'),message:redact(value.message||'Request failed'),...(value.code?{code:redact(value.code)}:{}),...(value.statusCode?{statusCode:value.statusCode}:{}),...(issues.length?{errors:issues.map(issue=>({category:redact(issue.category||''),code:redact(issue.code||''),detail:redact(issue.detail||'')}))}:{})};
+  }
+  return typeof value==='string'?redact(value):value;
 }
+function logError(...values){console.error(...values.map(safeLogValue));}
+function logWarning(...values){console.warn(...values.map(safeLogValue));}
+// SAFE_LOGGING_END
+
 
 const express = require("express");
 const cors = require("cors");
 const session = require("express-session");
 const db = require("./db");
 const crypto = require("crypto");
-// NOTE: uuid removed to avoid ERR_REQUIRE_ESM on Node 20
-// const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
 const archiver = require("archiver");
 const nodemailer = require("nodemailer");
+const {renderEmail} = require("./lib/branded-email");
 const sendToPrinter = require("./utils/thermalPrinter");
+const multer = require("multer");
 
 // Optional PDF support (packing list)
 let PDFDocument = null;
 try {
   PDFDocument = require("pdfkit");
 } catch (err) {
-  console.warn(
+  logWarning(
     'pdfkit not installed; packing slip PDF endpoint "/admin/orders/:id/packing-slip" will be disabled.'
   );
 }
@@ -44,7 +50,7 @@ let bwipjs = null;
 try {
   bwipjs = require("bwip-js");
 } catch (err) {
-  console.warn(
+  logWarning(
     'bwip-js not installed; barcode label endpoint "/admin/generate-barcodes" will be disabled.'
   );
 }
@@ -53,6 +59,30 @@ try {
 const INCH = 72;
 const LABEL_WIDTH_2x1 = 2 * INCH;
 const LABEL_HEIGHT_2x1 = 1 * INCH;
+
+// ====== DB TABLE ENSURE (adds pending_checkouts automatically) ======
+function ensureTables() {
+  try {
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS pending_checkouts (
+        id TEXT PRIMARY KEY,
+        square_payment_link_id TEXT,
+        square_order_id TEXT,
+        customer_name TEXT,
+        customer_email TEXT,
+        cart_json TEXT,
+        totals_json TEXT,
+        status TEXT DEFAULT 'CREATED',   -- CREATED | CONFIRMED | EXPIRED
+        created_at TEXT,
+        confirmed_at TEXT
+      )
+    `).run();
+    console.log("✅ ensured table: pending_checkouts");
+  } catch (e) {
+    logError("❌ ensureTables failed:", e);
+  }
+}
+ensureTables();
 
 // Small helper: break a string into chunks of up to maxChars (word-friendly)
 function wrapLabelText(text, maxChars) {
@@ -85,68 +115,33 @@ function buildTsplForItem(sku, labelText, quantity) {
   // We moved everything UP ≈6mm earlier.
   // TSPL uses 8 dots per mm → 6mm * 8 = 48 dots.
   // "Up" = *smaller* Y.
-  const SHIFT_UP = -48; // negative means move toward the top of the label
+  const SHIFT_UP = -48;
 
-  // Original positions (for reference):
-  //   BARCODE  y: 20
-  //   SKU text y: 120
-  //   DESC1    y: 150
-  //   DESC2    y: 175
-  //
-  // We'll keep barcode + SKU the same, and stack up to 3 description lines.
-  const BARCODE_Y  = 20  + SHIFT_UP; // 20 - 48 = -28 (printer clamps near top)
-  const SKU_TEXT_Y = 120 + SHIFT_UP; // 72
+  const BARCODE_Y = 20 + SHIFT_UP;
+  const SKU_TEXT_Y = 120 + SHIFT_UP;
 
   // Shift text slightly left to gain a bit more horizontal room
-  const DESC_X     = 30;             // was 40
-  const DESC1_Y    = 150 + SHIFT_UP; // 102
-  const DESC2_Y    = 175 + SHIFT_UP; // 127
-  const DESC3_Y    = 200 + SHIFT_UP; // 152 (still inside 25mm ≈ 200 dots)
+  const DESC_X = 30;
+  const DESC1_Y = 150 + SHIFT_UP;
+  const DESC2_Y = 175 + SHIFT_UP;
+  const DESC3_Y = 200 + SHIFT_UP;
 
   const tsplLines = [
-    // 2" wide (~50mm) x 1" tall (25mm) with a 3mm gap
     "SIZE 50 mm,25 mm",
     "GAP 3 mm,0 mm",
     "DIRECTION 1",
     "CLS",
-
-    // Big barcode – shifted upward
     `BARCODE 40,${BARCODE_Y},"128",90,0,0,3,6,"${safeSku}"`,
-
-    // SKU text under barcode
     `TEXT 80,${SKU_TEXT_Y},"3",0,1,1,"${safeSku}"`,
   ];
 
-  // First description line
-  if (wrapped[0]) {
-    tsplLines.push(
-      `TEXT ${DESC_X},${DESC1_Y},"3",0,1,1,"${wrapped[0]}"`
-    );
-  }
+  if (wrapped[0]) tsplLines.push(`TEXT ${DESC_X},${DESC1_Y},"3",0,1,1,"${wrapped[0]}"`);
+  if (wrapped[1]) tsplLines.push(`TEXT ${DESC_X},${DESC2_Y},"3",0,1,1,"${wrapped[1]}"`);
+  if (wrapped[2]) tsplLines.push(`TEXT ${DESC_X},${DESC3_Y},"3",0,1,1,"${wrapped[2]}"`);
 
-  // Second description line
-  if (wrapped[1]) {
-    tsplLines.push(
-      `TEXT ${DESC_X},${DESC2_Y},"3",0,1,1,"${wrapped[1]}"`
-    );
-  }
-
-  // Third description line (new)
-  if (wrapped[2]) {
-    tsplLines.push(
-      `TEXT ${DESC_X},${DESC3_Y},"3",0,1,1,"${wrapped[2]}"`
-    );
-  }
-
-  // Print N copies of this label
   tsplLines.push(`PRINT 1,${Number(quantity) || 1}`);
-
   return tsplLines.join("\r\n") + "\r\n";
 }
-
-
-
-
 
 // ===== EMAIL CONFIG & HELPERS =====
 const {
@@ -166,233 +161,49 @@ if (SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && EMAIL_FROM) {
   mailTransporter = nodemailer.createTransport({
     host: SMTP_HOST,
     port: Number(SMTP_PORT) || 587,
-    secure: Number(SMTP_PORT) === 465, // true for 465, false for 587/25
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS,
-    },
+    secure: Number(SMTP_PORT) === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
 } else {
-  console.warn(
-    "Email not fully configured – missing SMTP_* or EMAIL_FROM in .env"
-  );
+  logWarning("Email not fully configured – missing SMTP_* or EMAIL_FROM in .env");
 }
 
 async function sendEmail({ to, subject, text, html, bcc }) {
+  if(process.env.MAIL_DISABLED==="true")return;
   if (!mailTransporter) {
-    console.warn("sendEmail called but transporter is not configured");
+    logWarning("sendEmail called but transporter is not configured");
     return;
   }
 
   const message = {
-    from: `"Sugar Plum Creations" <${FROM_EMAIL}>`,
+    from: FROM_EMAIL.includes("<") ? FROM_EMAIL : { name: "Brackish Roots", address: FROM_EMAIL },
     to,
     subject,
     text: text || "",
-    html: html || text || "",
+    html: html || renderEmail({subject,text,contactEmail:SMTP_USER||"brackishroots@gmail.com"}).html,
+    attachments: renderEmail({subject,text}).attachments,
+    replyTo: SMTP_USER || "brackishroots@gmail.com",
   };
 
-  if (bcc) {
-    message.bcc = bcc;
-  }
+  if (bcc) message.bcc = bcc;
 
   try {
     await mailTransporter.sendMail(message);
   } catch (err) {
-    console.error("Error sending email:", err);
+    logError("Error sending email:", err);
   }
 }
 
-// Try to turn a tracking number into a clickable URL
 function buildTrackingUrl(trackingNumber) {
   if (!trackingNumber) return null;
   const trimmed = trackingNumber.trim();
-
-  // If they pasted a full URL, just use it
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-
-  // Otherwise, send them to a universal tracking page
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return `https://www.17track.net/en/track?nums=${encodeURIComponent(trimmed)}`;
 }
 
-// Build a branded SPC email HTML body
-function buildBrandedEmail({
-  title,
-  intro,
-  lines = [],
-  trackingNumber,
-  trackingUrl, // kept for future use if you ever re-add a button
-  footerNote,
-  ctaLabel,
-  ctaUrl,
-}) {
-  const safeTitle = title || "Sugar Plum Creations";
-  const safeIntro = intro || "";
-  const footer = footerNote || "Thank you for supporting our small business!";
-
-  const logoUrl = "https://shopsugarplum.co/spc-logo-round.png";
-
-  const baseFontStack =
-    "'Handwash','Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,Arial,sans-serif";
-
-  const linesHtml = lines
-    .map(
-      (line) =>
-        `<p style="margin: 0 0 6px; font-size: 14px; font-family:${baseFontStack}; color:#fff5ff;">${line}</p>`
-    )
-    .join("");
-
-  // Tracking block with ONLY tracking number pill (no 17track button)
-  let trackingHtml = "";
-  if (trackingNumber) {
-    trackingHtml += `
-      <div style="margin-top: 16px;">
-        <p style="
-          margin: 0 0 8px;
-          font-size: 14px;
-          font-family:${baseFontStack};
-          color:#fff5ff;
-        ">
-          <strong>Tracking:</strong>
-        </p>
-
-        <!-- Tracking Number Pill -->
-        <div style="margin-bottom: 12px;">
-          <span style="
-            display:inline-block;
-            border:none;
-            border-radius:999px;
-            padding:0.35rem 0.75rem;
-            font-size:0.9rem;
-            background:#ffffff;
-            color:#6a4d7a;
-            font-weight:600;
-            font-family:${baseFontStack};
-          ">
-            ${trackingNumber}
-          </span>
-        </div>
-      </div>
-    `;
-  }
-
-  // Main CTA button (for things like "Pay Now", "View Order", etc.)
-  let ctaHtml = "";
-  if (ctaLabel && ctaUrl) {
-    ctaHtml = `
-      <div style="margin-top: 24px; text-align: center;">
-        <a href="${ctaUrl}"
-           style="
-             display:inline-block;
-             border:none;
-             border-radius:999px;
-             padding:0.4rem 0.9rem;
-             font-size:0.9rem;
-             cursor:pointer;
-             background:#ffffff;
-             color:#6a4d7a;
-             text-decoration:none;
-             font-family:${baseFontStack};
-             font-weight:600;
-           ">
-          ${ctaLabel}
-        </a>
-      </div>
-    `;
-  }
-
-  return `
-  <div style="
-    background-color:#4c256c;
-    padding:24px 0;
-    font-family:${baseFontStack};
-  ">
-    <div style="
-      max-width:600px;
-      margin:0 auto;
-      background-color:#4f365e;
-      border-radius:16px;
-      box-shadow:0 4px 16px rgba(0,0,0,0.25);
-      overflow:hidden;
-      border:2px solid #b42ea0;
-    ">
-      <!-- Header -->
-      <div style="
-        background: radial-gradient(circle at top, #3b2035 0, #000000 55%);
-        padding:20px 16px;
-        text-align:center;
-      ">
-        <img
-          src="${logoUrl}"
-          alt="Sugar Plum Creations"
-          style="
-            width:72px;
-            height:72px;
-            border-radius:50%;
-            display:block;
-            margin:0 auto 10px;
-            border:3px solid #ffffff;
-          "
-        />
-        <h1 style="
-          margin:0;
-          font-size:24px;
-          color:#ffffff;
-          font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,Arial,sans-serif;
-          letter-spacing:0.03em;
-          font-weight:600;
-        ">
-          ${safeTitle}
-        </h1>
-      </div>
-
-      <!-- Body -->
-      <div style="padding:20px 24px 24px 24px;">
-        <p style="
-          margin:0 0 12px;
-          font-size:15px;
-          color:#fff5ff;
-          font-family:${baseFontStack};
-        ">
-          ${safeIntro}
-        </p>
-        ${linesHtml}
-        ${trackingHtml}
-        ${ctaHtml}
-      </div>
-
-      <!-- Footer -->
-      <div style="
-        padding:12px 24px;
-        border-top:1px solid rgba(255,255,255,0.15);
-        background-color:#5a3f6c;
-        font-size:12px;
-        color:#f4ddff;
-        text-align:center;
-      ">
-        <p style="
-          margin:0 0 4px;
-          font-family:${baseFontStack};
-        ">
-          ${footer}
-        </p>
-        <p style="
-          margin:0;
-          color:#e4c8ff;
-          font-size:11px;
-          font-family:${baseFontStack};
-        ">
-          Sugar Plum Creations • shopsugarplum.co
-        </p>
-      </div>
-    </div>
-  </div>
-  `;
+function buildBrandedEmail({title,intro,lines=[],trackingNumber,trackingUrl,footerNote,ctaLabel,ctaUrl}) {
+  return renderEmail({title,subject:title,text:[intro,...lines,trackingNumber?'Tracking: '+trackingNumber:'',trackingUrl||'',footerNote||''].filter(Boolean).join('\n\n'),ctaLabel:ctaLabel||(trackingUrl?'Track your order':undefined),ctaUrl:ctaUrl||trackingUrl,contactEmail:SMTP_USER||'brackishroots@gmail.com'}).html;
 }
-
-// Pretty-print order lines for internal emails
 function formatOrderForEmail(order) {
   let itemsBlock = "";
 
@@ -414,26 +225,22 @@ function formatOrderForEmail(order) {
               const lineHead = bits.join(" • ") || "Item";
               const qty = it.quantity || it.qty || 1;
               const price = it.price ? (it.price / 100).toFixed(2) : "";
-              return `- ${lineHead}  x${qty}${
-                price ? ` @ $${price}` : ""
-              }`;
+              return `- ${lineHead}  x${qty}${price ? ` @ $${price}` : ""}`;
             })
             .join("\n");
       }
     }
   } catch (e) {
-    console.warn("Could not parse order items JSON for email:", e);
+    logWarning("Could not parse order items JSON for email:", e);
   }
 
   if (!itemsBlock) {
-    itemsBlock =
-      "\n\nRaw order JSON:\n" + JSON.stringify(order, null, 2);
+    itemsBlock = "\n\nRaw order JSON:\n" + JSON.stringify(order, null, 2);
   }
 
   return itemsBlock;
 }
 
-// Send internal "new order" email (when status becomes PAID)
 async function sendNewOrderAlert(order) {
   if (!EMAIL_OWNER) return;
 
@@ -448,19 +255,14 @@ async function sendNewOrderAlert(order) {
       : "") +
     formatOrderForEmail(order);
 
-  await sendEmail({
-    to: EMAIL_OWNER,
-    subject,
-    text,
-  });
+  await sendEmail({ to: EMAIL_OWNER, subject, text });
 }
 
-// Customer emails for status changes (HTML, branded)
 async function sendCustomerStatusEmail(order, newStatus) {
   const to = order.customer_email;
   if (!to) return;
 
-  const status = newStatus.toUpperCase();
+  const status = String(newStatus || "").toUpperCase();
   let subject = "";
   let html = "";
   let bcc = undefined;
@@ -479,17 +281,15 @@ async function sendCustomerStatusEmail(order, newStatus) {
       (i) => `${i.quantity} × ${i.name} — $${(i.price / 100).toFixed(2)}`
     );
   } catch (e) {
-    console.error("Failed to parse items_json:", e);
+    logError("Failed to parse items_json:", e);
   }
 
   if (status === "PAID") {
-    subject = "Sugar Plum Creations – Order Confirmation";
+    subject = "Brackish Roots – Order Confirmation";
 
     html = buildBrandedEmail({
       title: "Order Confirmation",
-      intro: `Thank you for your order, ${
-        order.customer_name || "friend"
-      }! 🎉`,
+      intro: `Thank you for your order, ${order.customer_name || "friend"}! 🎉`,
       lines: [
         ...(total ? [`Order Total: ${total}`] : []),
         `Order ID: ${order.id}`,
@@ -501,14 +301,13 @@ async function sendCustomerStatusEmail(order, newStatus) {
       footerNote: "Thank you for supporting our small business!",
     });
 
-    // BCC you on confirmation
     bcc = EMAIL_OWNER;
   } else if (status === "SHIPPED") {
-    subject = "Your Sugar Plum Creations Order Has Shipped";
+    subject = "Your Brackish Roots Order Has Shipped";
 
     html = buildBrandedEmail({
       title: "Order Shipped",
-      intro: `Good news! Your Sugar Plum Creations order is on the way. 📦`,
+      intro: `Good news! Your Brackish Roots order is on the way. 📦`,
       lines: [
         ...(total ? [`Order Total: ${total}`] : []),
         `Order ID: ${order.id}`,
@@ -521,88 +320,57 @@ async function sendCustomerStatusEmail(order, newStatus) {
     return;
   }
 
-  await sendEmail({
-    to,
-    subject,
-    html,
-    bcc,
-  });
-}
-
-// Central helper to fire emails on status change
-async function handleOrderStatusEmails(order, oldStatus, newStatus) {
-  const previous = (oldStatus || "").toUpperCase();
-  const next = (newStatus || "").toUpperCase();
-
-  if (previous === next) return;
-
-  if (next === "PAID") {
-    await sendCustomerStatusEmail(order, "PAID");
-    await sendNewOrderAlert(order);
-  }
-
-  if (next === "SHIPPED") {
-    await sendCustomerStatusEmail(order, "SHIPPED");
-  }
+  await sendEmail({ to, subject, html, bcc });
 }
 
 // ===== Admin Config Storage =====
-const ADMIN_CONFIG_PATH = path.join(__dirname, "adminConfig.json");
-const EXPORTS_DIR = path.join(__dirname, "exports");
+for (const name of ['adminConfig.json','productConfig.json','patchesConfig.json']) {
+ const dest = path.join(db.dataDir, name), source = path.join(__dirname, name);
+ if (process.env.NODE_ENV !== 'test' && !fs.existsSync(dest) && fs.existsSync(source)) fs.copyFileSync(source, dest);
+}
+const seedUploads = path.join(__dirname,'public','uploads');
+const durableUploads = path.join(db.dataDir,'uploads');
+if (process.env.NODE_ENV !== 'test' && !fs.existsSync(durableUploads) && fs.existsSync(seedUploads)) fs.cpSync(seedUploads,durableUploads,{recursive:true});
+function atomicJSON(file,value) { const temporary=file+'.tmp';fs.writeFileSync(temporary,JSON.stringify(value,null,2));fs.renameSync(temporary,file); }
+
+const ADMIN_CONFIG_PATH = path.join(db.dataDir, "adminConfig.json");
+const EXPORTS_DIR = path.join(db.dataDir, "exports");
 
 // ===== Product Flags Storage =====
-const PRODUCT_CONFIG_PATH = path.join(__dirname, "productConfig.json");
+const PRODUCT_CONFIG_PATH = path.join(db.dataDir, "productConfig.json");
 
-// Admin config now includes popup options for the shop splash
-// and shipping settings (used by our checkout, not Shippo directly).
 let adminConfig = {
-  // Announcement bar
   bannerText: "",
   bannerVisible: false,
-
-  // Shop popup / splash settings
-  popupEnabled: false, // master on/off
-  popupMode: "none", // "none" | "event" | "inventory" | "custom"
-  popupCustomText: "", // used when popupMode === "custom"
-
-  // Shipping settings (stored in *dollars*, used to compute a shipping line item)
-  shippingFlatRate: 7.99, // flat-rate shipping in the lower 48
-  freeShippingThreshold: 75, // free shipping over this amount ($)
+  popupEnabled: false,
+  popupMode: "none",
+  popupCustomText: "",
+  shippingFlatRate: 7.99,
+  freeShippingThreshold: 75,
 };
 
-// Per-product flags (id → flags)
 let productConfig = {};
 
-// ---------- Admin config helpers ----------
 function loadAdminConfig() {
   try {
     if (fs.existsSync(ADMIN_CONFIG_PATH)) {
       const raw = fs.readFileSync(ADMIN_CONFIG_PATH, "utf8");
       const parsed = JSON.parse(raw);
-      // Merge so new fields get defaults even if file is older
-      adminConfig = {
-        ...adminConfig,
-        ...parsed,
-      };
+      adminConfig = { ...adminConfig, ...parsed };
     }
   } catch (err) {
-    console.error("Error loading admin config:", err);
+    logError("Error loading admin config:", err);
   }
 }
 
 function saveAdminConfig() {
   try {
-    fs.writeFileSync(
-      ADMIN_CONFIG_PATH,
-      JSON.stringify(adminConfig, null, 2),
-      "utf8"
-    );
+    atomicJSON(ADMIN_CONFIG_PATH, adminConfig);
   } catch (err) {
-    console.error("Error saving admin config:", err);
+    logError("Error saving admin config:", err);
   }
 }
 
-// ---------- Product config helpers ----------
 function loadProductConfig() {
   try {
     if (fs.existsSync(PRODUCT_CONFIG_PATH)) {
@@ -610,26 +378,121 @@ function loadProductConfig() {
       productConfig = JSON.parse(raw);
     }
   } catch (err) {
-    console.error("Error loading product config:", err);
+    logError("Error loading product config:", err);
     productConfig = {};
   }
 }
 
 function saveProductConfig() {
   try {
-    fs.writeFileSync(
-      PRODUCT_CONFIG_PATH,
-      JSON.stringify(productConfig, null, 2),
-      "utf8"
-    );
+    atomicJSON(PRODUCT_CONFIG_PATH, productConfig);
   } catch (err) {
-    console.error("Error saving product config:", err);
+    logError("Error saving product config:", err);
   }
 }
 
-// Load configs once when server starts
 loadAdminConfig();
 loadProductConfig();
+
+// ===== Patch Library Storage =====
+const PATCHES_CONFIG_PATH = path.join(db.dataDir, "patchesConfig.json");
+
+// We'll store uploaded patch images here:
+// /public/uploads/patches/<filename>
+const PATCHES_UPLOAD_DIR = path.join(db.dataDir, "uploads", "patches");
+
+function ensureDir(dir) {
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    logError("Failed to ensure dir:", dir, e);
+  }
+}
+ensureDir(PATCHES_UPLOAD_DIR);
+
+const {patchPricing}=require('./lib/patch-pricing');
+const {patchOptions,cleanPatchOptions}=require('./lib/patch-options');
+const patchMaterials=require('./lib/patch-materials');
+const DEFAULT_PATCH_CATEGORIES = ['Mississippi & Wildlife', 'Hunting', 'Fishing', 'Coastal', 'Faith', 'Funny', 'Golf', 'Dive', 'School & Team'];
+function cleanPatchCategories(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value.filter(v => typeof v === 'string').map(v => v.trim().slice(0,60)).filter(v => v && !seen.has(v.toLowerCase()) && seen.add(v.toLowerCase())).slice(0,50);
+}
+function patchCategoryList() {
+  return cleanPatchCategories([...(Array.isArray(patchesConfig.categories) ? patchesConfig.categories : DEFAULT_PATCH_CATEGORIES), ...patchesConfig.patches.flatMap(p => cleanPatchCategories(p.categories))]);
+}
+let patchesConfig = {
+  // patches: [{ id, name, imageUrl, active, createdAt, updatedAt }]
+  patches: [],
+};
+
+function loadPatchesConfig() {
+  try {
+    if (fs.existsSync(PATCHES_CONFIG_PATH)) {
+      const raw = fs.readFileSync(PATCHES_CONFIG_PATH, "utf8");
+      const parsed = JSON.parse(raw);
+      patchesConfig = { ...patchesConfig, ...parsed };
+      if (!Array.isArray(patchesConfig.patches)) patchesConfig.patches = [];
+    }
+  } catch (err) {
+    logError("Error loading patches config:", err);
+    patchesConfig = { patches: [] };
+  }
+}
+
+function savePatchesConfig() {
+  try {
+    atomicJSON(PATCHES_CONFIG_PATH, patchesConfig);
+  } catch (err) {
+    logError("Error saving patches config:", err);
+  }
+}
+
+loadPatchesConfig();
+const migratedMaterials=patchMaterials.migrateMaterials(patchesConfig);
+if(JSON.stringify(migratedMaterials)!==JSON.stringify(patchesConfig)){atomicJSON(PATCHES_CONFIG_PATH,migratedMaterials);patchesConfig=migratedMaterials;}
+
+// Multer config for patch image uploads
+const patchStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, PATCHES_UPLOAD_DIR);
+  },
+  filename: function (req, file, cb) {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const safeExt = ext && ext.length <= 10 ? ext : ".png";
+    const name = `patch-${Date.now()}-${crypto
+      .randomBytes(6)
+      .toString("hex")}${safeExt}`;
+    cb(null, name);
+  },
+});
+
+function isAllowedImageMime(mime) {
+  const ok = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+  return ok.includes((mime || "").toLowerCase());
+}
+const uploadPatchImage = multer({
+  storage: patchStorage,
+
+  // Allow high-quality transparent patch artwork
+  // up to 15 MB per image.
+  limits: {
+    fileSize: 15 * 1024 * 1024,
+  },
+
+  fileFilter: (req, file, cb) => {
+    if (!isAllowedImageMime(file.mimetype)) {
+      return cb(
+        new Error(
+          "Only image uploads are allowed (png, jpg, webp, gif)."
+        )
+      );
+    }
+
+    cb(null, true);
+  },
+});
 
 // Use the LEGACY Square SDK
 const { Client, Environment } = require("square/legacy");
@@ -637,116 +500,921 @@ const { Client, Environment } = require("square/legacy");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ===============================
+// STATIC FILE SERVING
+// ===============================
+
+// ✅ Patch uploads live in /public/uploads/... so serve that explicitly
+// (This makes /uploads/patches/<file> resolve correctly and avoids confusion.)
+const photoWatermarks=require('./lib/photo-watermarks')(app,{publicDir:path.join(__dirname,'public'),patchDir:PATCHES_UPLOAD_DIR,designDir:()=>path.join(db.dataDir,'apparel-artwork'),sources:()=>[...(cachedBaseProducts||[]).flatMap(p=>[p.image,...(p.variations||[]).flatMap(v=>[v.image,...(v.images||[])])]),...patchesConfig.patches.flatMap(p=>[p.imageUrl,...(p.variants||[]).map(v=>v.imageUrl)]),...(business.apparel?.state().designs||[]).map(d=>d.imageUrl)].filter(Boolean)});
+app.get('/assets/:file',async(req,res,next)=>{if(!/\.(png|jpe?g|webp)$/i.test(req.params.file)||photoWatermarks.siteArtwork('/assets/'+req.params.file))return next();try{await photoWatermarks.photo(res,path.join(__dirname,'public','storefront','assets',path.basename(req.params.file)));}catch{next();}});
+app.get('/uploads/patches/:file',async(req,res)=>{try{if(!/^[a-zA-Z0-9_.-]+$/.test(req.params.file))return res.status(404).end();await photoWatermarks.photo(res,path.join(PATCHES_UPLOAD_DIR,req.params.file));}catch{res.status(404).end();}});
+app.use("/uploads", express.static(path.join(db.dataDir, "uploads"), { dotfiles: "deny", setHeaders: res => { res.setHeader("X-Content-Type-Options","nosniff"); res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox"); } }));
+
 // Serve static admin assets (HTML/CSS/JS) from ./public
+app.use((req,res,next)=>{res.set('X-Content-Type-Options','nosniff');res.set('X-Frame-Options','DENY');res.set('Referrer-Policy','no-referrer');if(req.path.startsWith('/admin')||req.path.startsWith('/projects')||req.path.startsWith('/private-shop'))res.set('Cache-Control','private, no-store');next();});
 app.use(express.static(path.join(__dirname, "public")));
-// Explicit admin page routes (belt-and-suspenders)
-app.get("/admin-login.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "admin-login.html"));
-});
+app.use(express.static(path.join(__dirname, "public", "storefront")));
 
-app.get("/admin-login", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "admin-login.html"));
-});
+// ===============================
+// EXPLICIT ADMIN PAGE ROUTES
+// ===============================
+app.get("/admin-login.html", (req, res) =>
+  res.sendFile(path.join(__dirname, "public", "admin-login.html"))
+);
+app.get("/admin-login", (req, res) =>
+  res.sendFile(path.join(__dirname, "public", "admin-login.html"))
+);
+app.get("/admin.html", (req, res) =>
+  res.sendFile(path.join(__dirname, "public", "admin.html"))
+);
+app.get("/admin", (req, res) =>
+  res.sendFile(path.join(__dirname, "public", "admin.html"))
+);
 
-app.get("/admin.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "admin.html"));
-});
 
-app.get("/admin", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "admin.html"));
-});
-
-// ===== Render / proxy awareness (HTTPS cookies, etc.) =====
+// ===============================
+// RENDER / PROXY AWARENESS
+// ===============================
 const IS_RENDER = !!process.env.RENDER;
-const IS_PROD_LIKE =
-  process.env.NODE_ENV === "production" || IS_RENDER;
 
-// For Render / HTTPS behind proxy, we must trust the proxy
-if (IS_PROD_LIKE) {
-  app.set("trust proxy", 1);
-}
+// Treat Render as production-like even if NODE_ENV is undefined
+const IS_PROD_LIKE = process.env.NODE_ENV === "production" || IS_RENDER;
 
+if (IS_PROD_LIKE) app.set("trust proxy", 1);
 
-// ===== Middleware =====
-
-// CORS: allow localhost for dev + shopsugarplum.co for production.
-// Safari + cross-site cookies REQUIRE these headers to be exact.
+// ===============================
+// MIDDLEWARE
+// ===============================
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests without Origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
 
     const allowed = [
       "http://127.0.0.1:5500",
       "http://localhost:5500",
-      "https://shopsugarplum.co",
-      "https://www.shopsugarplum.co",
-      "https://sugarplum-backend.onrender.com", // ✅ allow backend-hosted admin pages
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://brackishroots.com",
+      "https://www.brackishroots.com",
+      "https://sugarplum-backend.onrender.com",
     ];
 
-    if (allowed.includes(origin)) {
-      return callback(null, true);
-    }
-
-    // In development: allow everything
-    if (process.env.NODE_ENV !== "production") {
-      return callback(null, true);
-    }
+    if (allowed.includes(origin)) return callback(null, true);
+    if ((process.env.ALLOWED_ORIGINS || "").split(",").map(s=>s.trim()).includes(origin)) return callback(null,true);
 
     return callback(new Error("Not allowed by CORS"));
   },
-
-  // REQUIRED FOR SAFARI + cross-site sessions
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Requested-With",
-  ],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-CSRF-Token", "X-Project-Token", "X-Shop-Token", "X-Shop-Passcode"],
 };
 
-// Apply CORS with credentials support
 app.use(cors(corsOptions));
-
-// Extra headers to satisfy Safari & iOS WebKit
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Credentials", "true");
   next();
 });
 
-// *** BODY PARSERS (for JSON form posts like /admin/login, /checkout, etc.) ***
-app.use(express.json());
+app.use(express.json({limit:"2mb",verify:(req,res,buf)=>{if(req.originalUrl==="/webhooks/square")req.rawBody=buf.toString("utf8");}}));
 app.use(express.urlencoded({ extended: true }));
 
-// ===== SESSION CONFIG (CROSS-SITE SAFE, WORKS WITH shopsugarplum.co FRONTEND) =====
+// ===============================
+// SESSION CONFIG
+// ===============================
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "change-this-secret",
+    secret: process.env.SESSION_SECRET || (()=>{if(IS_PROD_LIKE)throw new Error("SESSION_SECRET is required in production");return crypto.randomBytes(32).toString("hex");})(),
+    store: new (require("./lib/session-store"))(db),
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-
-      // On Render / production-like: cross-site cookie (needed for
-      // shopsugarplum.co → sugarplum-backend.onrender.com with fetch + credentials)
-      secure: IS_PROD_LIKE,                         // cookie only over HTTPS
-      sameSite: IS_PROD_LIKE ? "none" : "lax",      // "none" for cross-site, "lax" for local dev
-
-      // IMPORTANT: do NOT set "domain" here; let it default
-      // so the browser accepts the cookie for the backend host.
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+      secure: IS_PROD_LIKE,
+      sameSite: "lax",
+      maxAge: 1000 * 60 * 60 * 24 * 7,
     },
   })
 );
 
 
-// ---- Square client ----
-if (!process.env.SQUARE_ACCESS_TOKEN) {
-  console.warn("⚠️  SQUARE_ACCESS_TOKEN is not set in .env");
+// ===== Simple Admin Auth =====
+// ✅ FIX: do NOT use process.env.NODE_ENV directly here.
+// On Render, NODE_ENV is often undefined, which would bypass auth.
+function requireAdmin(req, res, next) {
+  // Admin authentication is enforced in local development as well.
+  if (req.session && req.session.isAdmin) return next();
+  return res.status(401).json({ error: "Not authorized" });
 }
 
-const squareClient = new Client({
+// Rate limits and CSRF are applied before all admin mutation routes.
+const limits = new Map();
+app.use((req,res,next)=>{
+ res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('X-Frame-Options','DENY');res.setHeader('Referrer-Policy','no-referrer');
+ const scope=req.path==='/admin/login'?'login':req.path==='/custom-requests'?'request':req.path==='/analytics/events'?'event':req.path==='/checkout'?'checkout':req.path.startsWith('/private-shop')?'private':req.path.startsWith('/projects/current/')?'project':null;
+ if(scope){const key=scope+':'+req.ip;let bucket=limits.get(key);if(!bucket||bucket.until<Date.now()){bucket={n:0,until:Date.now()+(scope==='request'?3600000:60000)};limits.set(key,bucket);}if(++bucket.n>({login:10,request:10,event:120,checkout:30,private:60,project:60}[scope]))return res.status(429).json({error:'Too many requests. Please try again later.'});if(limits.size>10000)for(const [k,v]of limits)if(v.until<Date.now())limits.delete(k);}
+ if(req.path.startsWith('/admin/')&&!['GET','HEAD','OPTIONS'].includes(req.method)&&req.path!=='/admin/login'){
+  if(!req.session?.isAdmin)return res.status(401).json({error:'Not authorized'});
+  if(!req.session.csrf || req.get('X-CSRF-Token')!==req.session.csrf)return res.status(403).json({error:'Session verification failed. Reload the admin page.'});
+ }
+ next();
+});
+app.post('/admin/login',(req,res)=>{
+ const {username,password}=req.body||{};
+ const equal=(a,b)=>crypto.timingSafeEqual(crypto.createHash('sha256').update(String(a||'')).digest(),crypto.createHash('sha256').update(String(b||'')).digest());
+ if(process.env.ADMIN_USERNAME&&process.env.ADMIN_PASSWORD&&equal(username,process.env.ADMIN_USERNAME)&&equal(password,process.env.ADMIN_PASSWORD)){
+  req.session.regenerate(err=>{if(err)return res.status(500).json({error:'Login unavailable'});req.session.isAdmin=true;req.session.csrf=crypto.randomBytes(32).toString('hex');req.session.save(()=>res.json({ok:true,csrfToken:req.session.csrf}));});
+ }else res.status(401).json({error:'Invalid username or password.'});
+});
+
+app.post("/admin/logout", (req, res) => {
+  if (req.session) req.session.destroy(() => {});
+  res.json({ ok: true });
+});
+
+app.get("/admin/me", (req, res) => {
+  if (req.session && req.session.isAdmin) return res.json({ isAdmin: true, csrfToken: req.session.csrf || (req.session.csrf=crypto.randomBytes(32).toString("hex")) });
+  return res.status(401).json({ error: "Not authorized" });
+});
+
+// ============== PATCHES (Build-Your-Own Hats) ==============
+//
+// Patch records support:
+//
+// - name
+// - imageUrl
+// - active
+// - physical width / height in inches
+//
+// Independent preview adjustment for:
+//
+//   CENTER
+//   - previewCenterScale
+//   - previewCenterOffsetX
+//   - previewCenterOffsetY
+//
+//   LEFT
+//   - previewLeftScale
+//   - previewLeftOffsetX
+//   - previewLeftOffsetY
+//
+//   RIGHT
+//   - previewRightScale
+//   - previewRightOffsetX
+//   - previewRightOffsetY
+//
+// Physical dimensions always remain the actual
+// finished patch dimensions.
+//
+// Preview settings ONLY affect how the artwork
+// appears in the Hat Builder.
+//
+// Scale:
+//   1.00 = 100%
+//   1.10 = 110%
+//   0.90 = 90%
+//
+// Offset:
+//   0 = default position
+//
+// IMPORTANT:
+//
+// Older patch records may still contain:
+//
+//   previewScale
+//   previewOffsetX
+//   previewOffsetY
+//
+// Those old values are automatically used as
+// the CENTER fallback so existing patch tuning
+// is not lost.
+//
+// ============================================================
+
+
+// ------------------------------------------------------------
+// Helper: safely convert patch numeric settings
+// ------------------------------------------------------------
+
+function cleanPatchNumber(
+  value,
+  fallback,
+  min,
+  max
+) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+
+  return Math.min(
+    max,
+    Math.max(min, number)
+  );
+}
+
+
+// ------------------------------------------------------------
+// Helper: normalize one patch's preview settings
+// ------------------------------------------------------------
+
+function normalizePatchPreviewSettings(p) {
+  /*
+    Legacy values are used as the CENTER fallback.
+
+    This preserves any tuning already done before
+    Center / Left / Right became independent.
+  */
+
+  const legacyScale =
+    cleanPatchNumber(
+      p?.previewScale,
+      1,
+      0.25,
+      3
+    );
+
+  const legacyOffsetX =
+    cleanPatchNumber(
+      p?.previewOffsetX,
+      0,
+      -100,
+      100
+    );
+
+  const legacyOffsetY =
+    cleanPatchNumber(
+      p?.previewOffsetY,
+      0,
+      -100,
+      100
+    );
+
+
+  // CENTER
+
+  const previewCenterScale =
+    cleanPatchNumber(
+      p?.previewCenterScale,
+      legacyScale,
+      0.25,
+      3
+    );
+
+  const previewCenterOffsetX =
+    cleanPatchNumber(
+      p?.previewCenterOffsetX,
+      legacyOffsetX,
+      -100,
+      100
+    );
+
+  const previewCenterOffsetY =
+    cleanPatchNumber(
+      p?.previewCenterOffsetY,
+      legacyOffsetY,
+      -100,
+      100
+    );
+
+
+  // LEFT
+  //
+  // Left and Right start neutral.
+  // The Hat Builder itself supplies the
+  // automatic base placement.
+  //
+  // These values are ONLY fine adjustment.
+
+  const previewLeftScale =
+    cleanPatchNumber(
+      p?.previewLeftScale,
+      1,
+      0.25,
+      3
+    );
+
+  const previewLeftOffsetX =
+    cleanPatchNumber(
+      p?.previewLeftOffsetX,
+      0,
+      -100,
+      100
+    );
+
+  const previewLeftOffsetY =
+    cleanPatchNumber(
+      p?.previewLeftOffsetY,
+      0,
+      -100,
+      100
+    );
+
+
+  // RIGHT
+
+  const previewRightScale =
+    cleanPatchNumber(
+      p?.previewRightScale,
+      1,
+      0.25,
+      3
+    );
+
+  const previewRightOffsetX =
+    cleanPatchNumber(
+      p?.previewRightOffsetX,
+      0,
+      -100,
+      100
+    );
+
+  const previewRightOffsetY =
+    cleanPatchNumber(
+      p?.previewRightOffsetY,
+      0,
+      -100,
+      100
+    );
+
+
+  return {
+    previewCenterScale,
+    previewCenterOffsetX,
+    previewCenterOffsetY,
+
+    previewLeftScale,
+    previewLeftOffsetX,
+    previewLeftOffsetY,
+
+    previewRightScale,
+    previewRightOffsetX,
+    previewRightOffsetY,
+  };
+}
+
+
+// ------------------------------------------------------------
+// Public: get active patches for the website
+// ------------------------------------------------------------
+
+patchMaterials.install(app,{auth:requireAdmin,get:()=>patchesConfig,commit:next=>{atomicJSON(PATCHES_CONFIG_PATH,next);patchesConfig=next;},restock:()=>business.checkRestocks()});
+
+app.get("/patches", (req, res) => {
+  try {
+    const patches =
+      Array.isArray(
+        patchesConfig.patches
+      )
+        ? patchesConfig.patches
+        : [];
+
+    const active =
+      patches
+        .filter(
+          (p) =>
+            p &&
+            p.active !== false
+        )
+        .map((p) => {
+          const preview =
+            normalizePatchPreviewSettings(
+              p
+            );
+
+          return {
+            ...p,
+            ...patchPricing(p,business.settings()),
+            variants:patchOptions({...p,variants:patchMaterials.resolveOptions(p,patchesConfig.materials)}),
+
+            /*
+              Older patches may not have
+              physical dimensions yet.
+            */
+
+            widthInches:
+              cleanPatchNumber(
+                p.widthInches,
+                3,
+                0.25,
+                10
+              ),
+
+            heightInches:
+              cleanPatchNumber(
+                p.heightInches,
+                2,
+                0.25,
+                10
+              ),
+
+            /*
+              Independent placement tuning.
+            */
+
+            ...preview,
+          };
+        });
+
+    res.json({
+      patches: photoWatermarks.publicImages(active),
+      categories: patchCategoryList(),
+    });
+  } catch (e) {
+    logError(
+      "Failed to load public patches:",
+      e
+    );
+
+    res.status(500).json({
+      error:
+        "Failed to load patches.",
+    });
+  }
+});
+
+
+// Category changes update metadata only; patch records and uploaded images are preserved.
+app.post('/admin/patch-categories', requireAdmin, (req, res) => {
+  const name = cleanPatchCategories([req.body?.name])[0];
+  if (!name) return res.status(400).json({error:'Enter a category name.'});
+  const categories = patchCategoryList();
+  if (categories.some(c => c.toLowerCase() === name.toLowerCase())) return res.status(409).json({error:'That category already exists.'});
+  if (categories.length >= 50) return res.status(400).json({error:'You can have up to 50 patch categories.'});
+  const next = {...patchesConfig, categories:[...categories,name]};
+  try { atomicJSON(PATCHES_CONFIG_PATH, next); patchesConfig=next; res.json({ok:true,categories:next.categories}); }
+  catch(e) { logError('Category save failed:',e);res.status(500).json({error:'Category could not be saved. Please retry.'}); }
+});
+app.delete('/admin/patch-categories', requireAdmin, (req, res) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name : '';
+  const categories=patchCategoryList();
+  if (!categories.includes(name)) return res.status(404).json({error:'Category no longer exists. Refresh the patch library.'});
+  let affected=0;
+  const next={...patchesConfig,categories:categories.filter(c=>c!==name),patches:patchesConfig.patches.map(p=>{
+    const previous=cleanPatchCategories(p.categories),remaining=previous.filter(c=>c!==name);
+    if (remaining.length===previous.length) return p;
+    affected++;return {...p,categories:remaining,updatedAt:new Date().toISOString()};
+  })};
+  try { atomicJSON(PATCHES_CONFIG_PATH,next);patchesConfig=next;res.json({ok:true,categories:next.categories,affected}); }
+  catch(e) { logError('Category deletion failed:',e);res.status(500).json({error:'Category could not be deleted. Nothing was changed.'}); }
+});
+
+// ------------------------------------------------------------
+// Admin: list ALL patches, including inactive
+// ------------------------------------------------------------
+
+app.get(
+  "/admin/patches",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const patches =
+        Array.isArray(
+          patchesConfig.patches
+        )
+          ? patchesConfig.patches
+          : [];
+
+      const normalized =
+        patches.map((p) => {
+          const preview =
+            normalizePatchPreviewSettings(
+              p
+            );
+
+          return {
+            ...p,
+            ...patchPricing(p,business.settings()),
+            variants:patchOptions({...p,variants:patchMaterials.resolveOptions(p,patchesConfig.materials)}),
+
+            widthInches:
+              cleanPatchNumber(
+                p.widthInches,
+                3,
+                0.25,
+                10
+              ),
+
+            heightInches:
+              cleanPatchNumber(
+                p.heightInches,
+                2,
+                0.25,
+                10
+              ),
+
+            ...preview,
+          };
+        });
+
+      res.json({
+        patches: normalized,
+        categories: patchCategoryList(),
+      });
+    } catch (e) {
+      logError(
+        "Failed to load admin patches:",
+        e
+      );
+
+      res.status(500).json({
+        error:
+          "Failed to load patches.",
+      });
+    }
+  }
+);
+
+
+// ------------------------------------------------------------
+// Admin: save patch list
+// Used for add / edit / enable / disable / delete
+// ------------------------------------------------------------
+
+app.put(
+  "/admin/patches",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const incoming =
+        req.body || {};
+
+      const nextPatches =
+        Array.isArray(
+          incoming.patches
+        )
+          ? incoming.patches
+          : null;
+
+      if (!nextPatches) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Body must include patches array.",
+          });
+      }
+
+      const now =
+        new Date().toISOString();
+
+
+      // --------------------------------------------------------
+      // Build cleaned / sanitized patch list
+      // --------------------------------------------------------
+
+      const cleaned =
+        nextPatches
+          .map((p) => {
+            if (!p) {
+              return null;
+            }
+
+
+            const id =
+              (
+                p.id || ""
+              )
+                .toString()
+                .trim() ||
+              crypto.randomUUID();
+
+
+            const name =
+              (
+                p.name || ""
+              )
+                .toString()
+                .trim();
+
+
+            const imageUrl =
+              (
+                p.imageUrl || ""
+              )
+                .toString()
+                .trim();
+
+
+            if (
+              !name ||
+              !imageUrl
+            ) {
+              return null;
+            }
+
+
+            // --------------------------------
+            // Actual finished patch dimensions
+            // --------------------------------
+
+            const widthInches =
+              cleanPatchNumber(
+                p.widthInches,
+                3,
+                0.25,
+                10
+              );
+
+            const heightInches =
+              cleanPatchNumber(
+                p.heightInches,
+                2,
+                0.25,
+                10
+              );
+
+
+            // --------------------------------
+            // Independent preview tuning
+            // --------------------------------
+
+            const preview =
+              normalizePatchPreviewSettings(
+                p
+              );
+
+
+            return {
+              id,
+              name,
+              imageUrl,
+              categories: cleanPatchCategories(p.categories),
+              ...patchPricing({...patchesConfig.patches.find(old=>old.id===id),...p},business.settings()),
+              variants:cleanPatchOptions(p.variants===undefined?patchesConfig.patches.find(old=>old.id===id)?.variants:p.variants,{imageUrl}),
+
+              widthInches,
+              heightInches,
+
+              /*
+                CENTER
+              */
+
+              previewCenterScale:
+                preview.previewCenterScale,
+
+              previewCenterOffsetX:
+                preview.previewCenterOffsetX,
+
+              previewCenterOffsetY:
+                preview.previewCenterOffsetY,
+
+
+              /*
+                LEFT
+              */
+
+              previewLeftScale:
+                preview.previewLeftScale,
+
+              previewLeftOffsetX:
+                preview.previewLeftOffsetX,
+
+              previewLeftOffsetY:
+                preview.previewLeftOffsetY,
+
+
+              /*
+                RIGHT
+              */
+
+              previewRightScale:
+                preview.previewRightScale,
+
+              previewRightOffsetX:
+                preview.previewRightOffsetX,
+
+              previewRightOffsetY:
+                preview.previewRightOffsetY,
+
+
+              active:
+                p.active !== false,
+
+              createdAt:
+                p.createdAt ||
+                now,
+
+              updatedAt:
+                now,
+            };
+          })
+          .filter(Boolean);
+
+
+      const nextConfig=patchMaterials.migrateMaterials({...patchesConfig,patches:cleaned,categories:cleanPatchCategories([...(Array.isArray(incoming.categories)?incoming.categories:patchCategoryList()),...cleaned.flatMap(p=>p.categories)])});
+      // Commit before cleaning files or notifying subscribers.
+      atomicJSON(PATCHES_CONFIG_PATH,nextConfig);
+
+      // ========================================================
+      // DELETE ORPHANED IMAGE FILES
+      //
+      // Files that belonged to deleted patches and are no longer
+      // referenced by any patch.
+      // ========================================================
+
+      try {
+        const prev =
+          Array.isArray(
+            patchesConfig.patches
+          )
+            ? patchesConfig.patches
+            : [];
+
+
+        const imageURLs=p=>[p.imageUrl,...(p.variants||[]).map(v=>v.imageUrl)].filter(Boolean);
+        const prevUrls=new Set(prev.flatMap(imageURLs));
+        const nextUrls=new Set(cleaned.flatMap(imageURLs));
+
+        // Anything that existed before
+        // but does not exist now belongs
+        // to a deleted / replaced patch.
+
+        const deletedUrls =
+          [...prevUrls].filter(
+            (url) =>
+              !nextUrls.has(url)
+          );
+
+
+        for (
+          const url of deletedUrls
+        ) {
+          /*
+            Only delete files from our
+            patch upload directory.
+
+            Never delete remote URLs or
+            anything outside it.
+          */
+
+          if (
+            !url.startsWith(
+              "/uploads/patches/"
+            )
+          ) {
+            continue;
+          }
+
+
+          const filename =
+            url
+              .replace(
+                "/uploads/patches/",
+                ""
+              )
+              .trim();
+
+
+          if (!filename) {
+            continue;
+          }
+
+
+          // Extra path traversal protection
+
+          if (
+            filename.includes("..") ||
+            filename.includes("/") ||
+            filename.includes("\\")
+          ) {
+            logWarning(
+              "Refusing to delete suspicious patch filename:",
+              filename
+            );
+
+            continue;
+          }
+
+
+          const filePath =
+            path.join(
+              PATCHES_UPLOAD_DIR,
+              filename
+            );
+
+
+          if (
+            fs.existsSync(
+              filePath
+            )
+          ) {
+            try {
+              fs.unlinkSync(
+                filePath
+              );
+
+              console.log(
+                "✅ Deleted patch image:",
+                filePath
+              );
+            } catch (e) {
+              logWarning(
+                "⚠️ Failed to delete patch image:",
+                filePath,
+                e.message || e
+              );
+            }
+          } else {
+            console.log(
+              "ℹ️ Patch image not found (already gone):",
+              filePath
+            );
+          }
+        }
+      } catch (
+        cleanupErr
+      ) {
+        /*
+          Cleanup should never prevent
+          us from saving the actual
+          patch configuration.
+        */
+
+        logWarning(
+          "⚠️ Patch cleanup failed (continuing):",
+          cleanupErr.message ||
+            cleanupErr
+        );
+      }
+
+
+      // --------------------------------------------------------
+      // Save new patch configuration
+      // --------------------------------------------------------
+
+      patchesConfig=nextConfig;
+      business.checkRestocks();
+
+
+      res.json({
+        ok: true,
+        patches:
+          patchesConfig.patches,
+      });
+    } catch (e) {
+      logError(
+        "Failed to save patches:",
+        e
+      );
+
+      res.status(e.status||500).json({error:e.status?e.message:"Failed to save patches."});
+    }
+  }
+);
+
+
+// ------------------------------------------------------------
+// Admin: upload patch artwork
+// ------------------------------------------------------------
+
+app.post(
+  "/admin/patches/upload",
+  requireAdmin,
+  uploadPatchImage.single(
+    "file"
+  ),
+  (req, res) => {
+    try {
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "No file uploaded.",
+          });
+      }
+
+      // Public URL served from /public
+
+      const publicUrl =
+        `/uploads/patches/${req.file.filename}`;
+
+      res.json({
+        ok: true,
+        url: publicUrl,
+      });
+    } catch (e) {
+      logError(
+        "Patch upload failed:",
+        e
+      );
+
+      res.status(500).json({
+        error:
+          "Patch upload failed.",
+      });
+    }
+  }
+);
+
+// ---- Square client ----
+if (!process.env.SQUARE_ACCESS_TOKEN) {
+  logWarning("⚠️  SQUARE_ACCESS_TOKEN is not set in .env");
+}
+
+const squareClient = process.env.NODE_ENV==='test'&&global.__BR_SQUARE_TEST__ ? global.__BR_SQUARE_TEST__ : new Client({
   accessToken: process.env.SQUARE_ACCESS_TOKEN,
   environment:
     process.env.SQUARE_ENVIRONMENT === "production"
@@ -757,9 +1425,16 @@ const squareClient = new Client({
 console.log("Square client created");
 console.log("Square env:", process.env.SQUARE_ENVIRONMENT || "sandbox");
 
+const business = require('./lib/business-system')(app, {
+ db, square: process.env.NODE_ENV==='test' && global.__BR_SQUARE_TEST__ ? global.__BR_SQUARE_TEST__ : squareClient,
+ requireAdmin, getCatalog:()=>cachedBaseProducts || cachedCatalog || [], publicImages:photoWatermarks.publicImages,photo:photoWatermarks.photo,watermark:photoWatermarks.stamp, getPatches:()=>(patchesConfig.patches || []).map(p=>({...p,variants:patchMaterials.resolveOptions(p,patchesConfig.materials)})),
+ getAdminConfig:()=>adminConfig, getProductFlags:id=>normalizeFlags(productConfig[id] || {}),
+ refresh:async(forceCatalog=false)=>{if(process.env.NODE_ENV==='test' && global.__BR_CATALOG_TEST__){cachedCatalog=global.__BR_CATALOG_TEST__;cachedBaseProducts=global.__BR_CATALOG_TEST__;return;}if(forceCatalog)await refreshCatalogFromSquare();else await ensureCatalogFresh();await refreshInventoryForCatalog();}
+});
+
 // Simple test route
 app.get("/", (req, res) => {
-  res.json({ message: "Sugar Plum backend is running!" });
+  res.json({ message: "Brackish Roots backend is running!" });
 });
 
 //
@@ -771,10 +1446,9 @@ function looksLikeApparel(item) {
   const data = item.itemData || {};
   const name = (data.name || "").toLowerCase();
 
-  const variationNames = (data.variations || []).map(
-    (v) => (v.itemVariationData?.name || "").toLowerCase()
+  const variationNames = (data.variations || []).map((v) =>
+    (v.itemVariationData?.name || "").toLowerCase()
   );
-
   const sizeText = variationNames.join(" ");
 
   const sizeKeywords = [
@@ -808,25 +1482,37 @@ function looksLikeApparel(item) {
     "tank",
   ];
 
-  const hasSizeFromVariations = sizeKeywords.some((kw) =>
-    sizeText.includes(kw)
-  );
+  const hasSizeFromVariations = sizeKeywords.some((kw) => sizeText.includes(kw));
   const hasApparelWordInName = apparelKeywords.some((kw) => name.includes(kw));
 
   return hasApparelWordInName || hasSizeFromVariations;
 }
 
-// ---------- Type detection (T-Shirt / Hoodie / Sweatshirt) ----------
+// ---------- CATEGORY HELPERS (Square Category as source-of-truth) ----------
+const {normalizeCategoryName,resolveItemCategory}=require('./lib/catalog-categories');
+
+function buildCategoryIdToNameMap(allObjects) {
+  const map = {};
+  for (const obj of allObjects || []) {
+    if (obj?.type === "CATEGORY") {
+      const id = obj.id;
+      const name = obj.categoryData?.name || "";
+      if (id && name) map[id] = name;
+    }
+  }
+  return map;
+}
+
 function inferType(rawName) {
   const n = (rawName || "").toLowerCase();
   if (n.includes("hoodie")) return "Hoodies";
   if (n.includes("sweatshirt") || n.includes("crew")) return "Sweatshirts";
   if (n.includes("long sleeve")) return "Long Sleeve";
   if (n.includes("tank")) return "Tanks";
-  return "T-Shirts"; // default for now
+  return "T-Shirts";
 }
 
-// ---------- Parse variation name into size + color (IMPROVED) ----------
+// ---------- Parse variation name into size + color ----------
 function parseVariationName(vName) {
   if (!vName) return { size: null, color: null };
 
@@ -836,8 +1522,6 @@ function parseVariationName(vName) {
     .map((p) => p.trim())
     .filter(Boolean);
 
-  // Normalized list of size "tokens" we care about.
-  // These are compared AFTER stripping spaces, hyphens, and periods.
   const SIZE_TOKENS = [
     "nb",
     "0-3m",
@@ -877,31 +1561,12 @@ function parseVariationName(vName) {
   ];
 
   function looksLikeSize(partLower) {
-    // remove spaces, hyphens, and periods so:
-    // "X-Large" -> "xlarge", "S." -> "s"
     const compact = partLower.replace(/[\s.-]/g, "");
-
-    // Direct token match (xl, 2xl, xlarge, etc.)
     if (SIZE_TOKENS.includes(compact)) return true;
-
-    // Words like "small", "medium", "large"
-    if (
-      compact === "small" ||
-      compact === "medium" ||
-      compact === "large"
-    ) {
+    if (compact === "small" || compact === "medium" || compact === "large")
       return true;
-    }
-
-    // Youth / toddler / 2T etc.
-    if (
-      compact.includes("youth") ||
-      compact.includes("toddler") ||
-      /^\d+t$/.test(compact) // 2t, 3t, 4t, etc.
-    ) {
+    if (compact.includes("youth") || compact.includes("toddler") || /^\d+t$/.test(compact))
       return true;
-    }
-
     return false;
   }
 
@@ -910,7 +1575,6 @@ function parseVariationName(vName) {
 
   parts.forEach((part) => {
     const lower = part.toLowerCase();
-
     const isGarmentWord =
       lower.includes("shirt") ||
       lower.includes("t-shirt") ||
@@ -926,60 +1590,45 @@ function parseVariationName(vName) {
     }
   });
 
-  // Special handling for names like "Hot Pink Youth X-Small"
   if (!size) {
     const lowerFull = original.toLowerCase();
-
-    if (
-      lowerFull.includes("youth x-small") ||
-      lowerFull.includes("youth x small")
-    ) {
+    if (lowerFull.includes("youth x-small") || lowerFull.includes("youth x small")) {
       size = "Youth X-Small";
-
       const youthIndex = lowerFull.indexOf("youth");
       if (youthIndex > 0 && !color) {
         const colorRaw = original.slice(0, youthIndex).trim();
-        if (colorRaw) {
-          color = colorRaw;
-        }
+        if (colorRaw) color = colorRaw;
       }
     }
   }
 
-  // Normalize sizes so they line up nicely in the UI
   if (size) {
     const raw = size.toLowerCase().trim();
-    const compact = raw.replace(/[\s.-]/g, ""); // "x-large" -> "xlarge"
+    const compact = raw.replace(/[\s.-]/g, "");
 
-    if (raw === "small") {
-      size = "S";
-    } else if (raw === "medium") {
-      size = "M";
-    } else if (raw === "large") {
-      size = "L";
-    } else if (
+    if (raw === "small") size = "S";
+    else if (raw === "medium") size = "M";
+    else if (raw === "large") size = "L";
+    else if (
       ["xl", "x-large", "x large", "xlarge"].includes(raw) ||
       ["xl", "xlarge"].includes(compact)
-    ) {
+    )
       size = "XL";
-    } else if (
+    else if (
       ["2xl", "xxl", "2x"].includes(raw) ||
       ["2xl", "xxl", "2x", "2xlarge"].includes(compact)
-    ) {
+    )
       size = "2XL";
-    } else if (
+    else if (
       ["3xl", "xxxl", "3x"].includes(raw) ||
       ["3xl", "xxxl", "3x", "3xlarge"].includes(compact)
-    ) {
+    )
       size = "3XL";
-    }
   }
 
   return { size, color };
 }
 
-
-// small helper for word-matching in description
 function hasWordOrTag(descLower, base) {
   const d = ` ${descLower} `;
   const w = base.toLowerCase();
@@ -988,36 +1637,23 @@ function hasWordOrTag(descLower, base) {
   return false;
 }
 
-// ---------- Audience detection (Men/Unisex, Women, Kids, multi) ----------
 function inferAudience(name, variations, description) {
   const audiences = new Set();
   const n = (name || "").toLowerCase();
   const d = (description || "").toLowerCase();
 
-  // 1) Manual override via description tags/words
-  if (hasWordOrTag(d, "women") || hasWordOrTag(d, "womens")) {
-    audiences.add("Women");
-  }
-
+  if (hasWordOrTag(d, "women") || hasWordOrTag(d, "womens")) audiences.add("Women");
   if (
     hasWordOrTag(d, "men/unisex") ||
     hasWordOrTag(d, "men") ||
     hasWordOrTag(d, "unisex")
-  ) {
+  )
     audiences.add("Men/Unisex");
-  }
+  if (hasWordOrTag(d, "kids") || hasWordOrTag(d, "youth")) audiences.add("Kids");
+  if (audiences.size > 0) return Array.from(audiences);
 
-  if (hasWordOrTag(d, "kids") || hasWordOrTag(d, "youth")) {
-    audiences.add("Kids");
-  }
-
-  if (audiences.size > 0) {
-    return Array.from(audiences);
-  }
-
-  // 2) Automatic detection
-  const sizeNames = (variations || []).map(
-    (v) => (v.itemVariationData?.name || "").toLowerCase()
+  const sizeNames = (variations || []).map((v) =>
+    (v.itemVariationData?.name || "").toLowerCase()
   );
 
   let hasYouth = false;
@@ -1031,11 +1667,9 @@ function inferAudience(name, variations, description) {
       s.includes("3t") ||
       s.includes("2t") ||
       /^\d+t$/.test(s.trim())
-    ) {
+    )
       hasYouth = true;
-    } else if (s.trim()) {
-      hasAdult = true;
-    }
+    else if (s.trim()) hasAdult = true;
   });
 
   if (
@@ -1045,13 +1679,10 @@ function inferAudience(name, variations, description) {
     n.includes("4t") ||
     n.includes("3t") ||
     n.includes("2t")
-  ) {
+  )
     hasYouth = true;
-  }
 
-  if (hasYouth) {
-    audiences.add("Kids");
-  }
+  if (hasYouth) audiences.add("Kids");
 
   const femaleNameKeywords = [
     "mama",
@@ -1064,7 +1695,6 @@ function inferAudience(name, variations, description) {
     "cheer",
     "dance",
   ];
-
   const femaleColorWords = [
     "pink",
     "hot pink",
@@ -1080,23 +1710,15 @@ function inferAudience(name, variations, description) {
 
   const looksFemaleName = femaleNameKeywords.some((k) => n.includes(k));
   const variationText = sizeNames.join(" ");
-  const looksFemaleColor = femaleColorWords.some((c) =>
-    variationText.includes(c)
-  );
-  const looksExplicitWoman =
-    n.includes("women") || n.includes("ladies") || n.includes("female");
+  const looksFemaleColor = femaleColorWords.some((c) => variationText.includes(c));
+  const looksExplicitWoman = n.includes("women") || n.includes("ladies") || n.includes("female");
 
-  const isFemaleDesign =
-    looksFemaleName || looksFemaleColor || looksExplicitWoman;
-
-  if (hasAdult && isFemaleDesign) {
-    audiences.add("Women");
-  }
+  const isFemaleDesign = looksFemaleName || looksFemaleColor || looksExplicitWoman;
+  if (hasAdult && isFemaleDesign) audiences.add("Women");
 
   return Array.from(audiences);
 }
 
-// ---------- Subcategory detection ----------
 function inferSubcategory(name, description) {
   const text = ((name || "") + " " + (description || "")).toLowerCase();
 
@@ -1107,10 +1729,8 @@ function inferSubcategory(name, description) {
     text.includes("santa") ||
     text.includes("elf") ||
     text.includes("reindeer")
-  ) {
+  )
     return "Christmas";
-  }
-
   if (
     text.includes("thanksgiving") ||
     text.includes("turkey") ||
@@ -1118,10 +1738,8 @@ function inferSubcategory(name, description) {
     text.includes("thankful") ||
     text.includes("fall") ||
     text.includes("autumn")
-  ) {
+  )
     return "Thanksgiving";
-  }
-
   if (
     text.includes("halloween") ||
     text.includes("witch") ||
@@ -1130,29 +1748,18 @@ function inferSubcategory(name, description) {
     text.includes("spooky") ||
     text.includes("boo") ||
     text.includes("skeleton")
-  ) {
+  )
     return "Halloween";
-  }
-
   if (
     text.includes("valentine") ||
     text.includes("valentines") ||
     text.includes("love") ||
     text.includes("heart") ||
     text.includes("cupid")
-  ) {
+  )
     return "Valentine";
-  }
-
-  if (
-    text.includes("easter") ||
-    text.includes("bunny") ||
-    text.includes("egg") ||
-    text.includes("resurrection")
-  ) {
+  if (text.includes("easter") || text.includes("bunny") || text.includes("egg") || text.includes("resurrection"))
     return "Easter";
-  }
-
   if (
     text.includes("usa") ||
     text.includes("american") ||
@@ -1163,10 +1770,8 @@ function inferSubcategory(name, description) {
     text.includes("merica") ||
     text.includes("4th of july") ||
     text.includes("independence")
-  ) {
+  )
     return "Patriotic";
-  }
-
   if (
     text.includes("faith") ||
     text.includes("jesus") ||
@@ -1177,10 +1782,8 @@ function inferSubcategory(name, description) {
     text.includes("prayer") ||
     text.includes("church") ||
     text.includes("god ")
-  ) {
+  )
     return "Faith";
-  }
-
   if (
     text.includes("dog") ||
     text.includes("dogs") ||
@@ -1191,10 +1794,8 @@ function inferSubcategory(name, description) {
     text.includes("horse") ||
     text.includes("animal") ||
     text.includes("paw")
-  ) {
+  )
     return "Animals";
-  }
-
   if (
     text.includes("hunt") ||
     text.includes("hunting") ||
@@ -1209,10 +1810,8 @@ function inferSubcategory(name, description) {
     text.includes("rifle") ||
     text.includes("bowhunting") ||
     text.includes("bow hunting")
-  ) {
+  )
     return "Hunting & Fishing";
-  }
-
   if (
     text.includes("football") ||
     text.includes("baseball") ||
@@ -1223,10 +1822,8 @@ function inferSubcategory(name, description) {
     text.includes("touchdown") ||
     text.includes("homerun") ||
     text.includes("home run")
-  ) {
+  )
     return "Sports";
-  }
-
   if (
     text.includes("sarcasm") ||
     text.includes("funny") ||
@@ -1236,14 +1833,12 @@ function inferSubcategory(name, description) {
     text.includes("meme") ||
     text.includes("coffee") ||
     text.includes("wine")
-  ) {
+  )
     return "Humor / Trendy";
-  }
 
   return null;
 }
 
-// ---------- Normalize product flags ----------
 function normalizeFlags(rawFlags = {}) {
   return {
     isNew: !!rawFlags.isNew,
@@ -1251,36 +1846,28 @@ function normalizeFlags(rawFlags = {}) {
     pinToTop: !!rawFlags.pinToTop,
     hideOnline: !!rawFlags.hideOnline,
     hideKiosk: !!rawFlags.hideKiosk,
-    ribbonType:
-      typeof rawFlags.ribbonType === "string" ? rawFlags.ribbonType : "none", // "none" | "new" | "featured" | "custom" | etc.
+    ribbonType: typeof rawFlags.ribbonType === "string" ? rawFlags.ribbonType : "none",
     ribbonCustomText:
-      typeof rawFlags.ribbonCustomText === "string"
-        ? rawFlags.ribbonCustomText
-        : "",
+      typeof rawFlags.ribbonCustomText === "string" ? rawFlags.ribbonCustomText : "",
   };
 }
 
 //
-// ===== CATALOG & INVENTORY CACHING (MASTER LIST) =====
+// ===== CATALOG & INVENTORY CACHING =====
 //
-// Catalog is slow-changing (names, images, etc.)
-// Inventory is fast-changing (quantities)
-const CATALOG_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const INVENTORY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+const INVENTORY_TTL_MS = 5 * 60 * 1000;
 
-// cachedCatalog: apparel items with variations (size/color/price) but NO quantities
 let cachedCatalog = null;
 let lastCatalogFetch = 0;
 
-// cachedBaseProducts: same as catalog but with quantity on each variation
 let cachedBaseProducts = null;
 let lastInventoryFetch = 0;
 
 // ===== Custom Attribute keys (for variations) =====
-// Change this string if your Square custom attribute key is different.
 const PRINT_LOCATION_CA_KEY = "print_location";
 
-// ----- Refresh catalog from Square (slow but rare) -----
+// ----- Refresh catalog from Square -----
 async function refreshCatalogFromSquare() {
   console.log("Refreshing catalog from Square (full catalog fetch)...");
   const catalogApi = squareClient.catalogApi;
@@ -1289,76 +1876,169 @@ async function refreshCatalogFromSquare() {
   const allObjects = [];
 
   do {
+    // legacy SDK supports listCatalog(cursor) in your current setup
     const resp = await catalogApi.listCatalog(cursor);
-    if (resp.result.objects) {
-      allObjects.push(...resp.result.objects);
-    }
-    cursor = resp.result.cursor;
+    const objs = resp?.result?.objects || [];
+    if (objs.length) allObjects.push(...objs);
+    cursor = resp?.result?.cursor;
   } while (cursor);
 
   console.log("Total catalog objects:", allObjects.length);
 
-  const items = allObjects.filter((obj) => obj.type === "ITEM");
+  const {optionIndex,variationOptions}=require('./lib/square-options');
+  // Resolve option definitions if Square did not include them in the initial listing.
+  const optionIds=[...new Set(allObjects.filter(o=>o.type==='ITEM').flatMap(o=>(o.itemData?.variations||[]).flatMap(v=>(v.itemVariationData?.itemOptionValues||[]).map(r=>r.itemOptionId))).filter(Boolean))];
+  const missingOptions=optionIds.filter(id=>!allObjects.some(o=>o.type==='ITEM_OPTION'&&o.id===id));
+  for(let offset=0;offset<missingOptions.length;offset+=1000){const response=await catalogApi.batchRetrieveCatalogObjects({objectIds:missingOptions.slice(offset,offset+1000),includeRelatedObjects:true});allObjects.push(...(response.result?.objects||[]),...(response.result?.relatedObjects||[]));}
+  const squareOptionIndex=optionIndex(allObjects);
+  // ===== CATEGORY MAP (id -> name) =====
+  const categoryIdToName = {};
+  for (const obj of allObjects) {
+    if (obj?.type === "CATEGORY") {
+      const id = obj.id;
+      const name = obj.categoryData?.name || "";
+      if (id && name) categoryIdToName[id] = String(name).trim();
+    }
+  }
+
+  function resolveItemCategoryInner(item) {
+    return resolveItemCategory(item,categoryIdToName);
+  }
+// Map Square IMAGE catalog object IDs to their image URLs.
+// Hat variations can reference these IDs so each color can
+// carry its own Front / Angled / Back image set.
+const imageIdToUrl = {};
+
+// First use any IMAGE objects Square already returned
+for (const obj of allObjects) {
+  if (
+    obj?.type === "IMAGE" &&
+    obj.id &&
+    obj.imageData?.url
+  ) {
+    imageIdToUrl[obj.id] = obj.imageData.url;
+  }
+}
+
+// Collect every image ID referenced by item variations
+const referencedVariationImageIds = [];
+
+for (const obj of allObjects) {
+  if (obj?.type !== "ITEM") continue;
+
+  const variations = obj.itemData?.variations || [];
+
+  for (const variation of variations) {
+    const ids =
+      variation?.itemVariationData?.imageIds || [];
+
+    for (const id of ids) {
+      if (
+        id &&
+        !referencedVariationImageIds.includes(id)
+      ) {
+        referencedVariationImageIds.push(id);
+      }
+    }
+  }
+}
+
+// Retrieve any referenced images that were not included
+// as IMAGE objects in the original catalog response.
+const missingVariationImageIds =
+  referencedVariationImageIds.filter(
+    (id) => !imageIdToUrl[id]
+  );
+
+if (missingVariationImageIds.length > 0) {
+  try {
+    const imageResult =
+      await squareClient.catalogApi.batchRetrieveCatalogObjects({
+        objectIds: missingVariationImageIds,
+        includeRelatedObjects: false,
+      });
+
+    const imageObjects =
+      imageResult?.result?.objects || [];
+
+    for (const obj of imageObjects) {
+      if (
+        obj?.type === "IMAGE" &&
+        obj.id &&
+        obj.imageData?.url
+      ) {
+        imageIdToUrl[obj.id] = obj.imageData.url;
+      }
+    }
+
+    console.log(
+      "Variation images resolved:",
+      Object.keys(imageIdToUrl).length
+    );
+  } catch (err) {
+    logError(
+      "Failed to resolve variation images:",
+      err?.response?.body || err
+    );
+  }
+}
+
+  const items = [...new Map(allObjects.filter((obj) => obj?.type === "ITEM").map(obj=>[obj.id,obj])).values()];
   console.log("Total ITEM objects:", items.length);
 
-  const apparelItems = [];
+  const normalizedCatalog = [];
+
+  let countApparel = 0;
+  let countHats = 0;
+  let countHatBlanks = 0;
+  let count3d = 0;
+  let countOther = 0;
 
   for (const item of items) {
     const data = item.itemData || {};
     const rawName = data.name || "";
 
-    if (!Array.isArray(data.variations) || data.variations.length === 0) {
-      continue;
+    // Must have variations to sell
+    if (!Array.isArray(data.variations) || data.variations.length === 0) continue;
+
+    // Category preferred, fallback logic if missing
+    const catInfo = resolveItemCategoryInner(item);
+
+    let bucket = catInfo.category;
+    if (!bucket) {
+      bucket = looksLikeApparel(item) ? "Apparel" : "Other";
     }
 
-    if (!looksLikeApparel(item)) {
-      continue;
+    if (["Apparel","Blank Apparel"].includes(bucket)) countApparel++;
+    else if (bucket === "Hats") countHats++;
+    else if (bucket === "Hat Blanks") countHatBlanks++;
+    else if (bucket === "3D") count3d++;
+    else countOther++;
+
+    // Keep your old "skip blank T-Shirt placeholder" logic ONLY for Apparel
+    if (["Apparel","Blank Apparel"].includes(bucket)) {
+      const variationNames = data.variations.map((v) => v.itemVariationData?.name || "");
+      const parsedVariations = variationNames.map((n) => parseVariationName(n));
+
+      const allSizesNull = parsedVariations.every((p) => p.size === null);
+      const allColorsRegular = parsedVariations.every(
+        (p) => (p.color || "").toLowerCase() === "regular"
+      );
+
+      if (rawName === "T-Shirt" && !data.imageUrl && allSizesNull && allColorsRegular) continue;
     }
 
-    const variationNames = data.variations.map(
-      (v) => v.itemVariationData?.name || ""
-    );
-    const parsedVariations = variationNames.map((n) => parseVariationName(n));
-
-    const allSizesNull = parsedVariations.every((p) => p.size === null);
-    const allColorsRegular = parsedVariations.every(
-      (p) => (p.color || "").toLowerCase() === "regular"
-    );
-
-    // Skip generic "T-Shirt" template items
-    if (
-      rawName === "T-Shirt" &&
-      !data.imageUrl &&
-      allSizesNull &&
-      allColorsRegular
-    ) {
-      continue;
-    }
-
-    apparelItems.push(item);
-  }
-
-  console.log("Total apparel ITEMs:", apparelItems.length);
-
-  const normalizedCatalog = [];
-
-  for (const item of apparelItems) {
-    const data = item.itemData || {};
-    const rawName = data.name || "";
-
-    // IMAGE
+    // Resolve image
     let imageUrl = data.imageUrl || null;
 
     if (!imageUrl && Array.isArray(data.imageIds) && data.imageIds.length > 0) {
       const imgId = data.imageIds[0];
       try {
         const imgResp = await catalogApi.retrieveCatalogObject(imgId);
-        const imgObj = imgResp.result.object;
-        if (imgObj?.imageData?.url) {
-          imageUrl = imgObj.imageData.url;
-        }
+        const imgObj = imgResp?.result?.object;
+        if (imgObj?.imageData?.url) imageUrl = imgObj.imageData.url;
       } catch (err) {
-        console.error(
+        logError(
           "Error retrieving image object for",
           rawName,
           "id:",
@@ -1368,53 +2048,78 @@ async function refreshCatalogFromSquare() {
       }
     }
 
-    const type = inferType(rawName);
-    const audience = inferAudience(
-      rawName,
-      data.variations,
-      data.description
-    );
-    const subcategory = inferSubcategory(rawName, data.description);
+    // Apparel-only enrichment
+    const type = ["Apparel","Blank Apparel"].includes(bucket) ? inferType(rawName) : bucket;
+    const audience =
+      ["Apparel","Blank Apparel"].includes(bucket) ? inferAudience(rawName, data.variations, data.description) : [];
+    const subcategory =
+      ["Apparel","Blank Apparel"].includes(bucket) ? inferSubcategory(rawName, data.description) : null;
 
-const variations = (data.variations || []).map((v) => {
-  const vData = v.itemVariationData || {};
-  const { size, color } = parseVariationName(vData.name || "");
+    const variations = (data.variations || []).map((v) => {
+      const vData = v.itemVariationData || {};
+      const namedOptions=variationOptions(vData,squareOptionIndex);
 
-  let price = 0;
-  if (vData.priceMoney && vData.priceMoney.amount != null) {
-    price = Number(vData.priceMoney.amount) / 100;
-  }
+      const parsed =
+  ["Apparel","Blank Apparel"].includes(bucket)
+    ? parseVariationName(vData.name || "")
+    : ["Hats","Hat Blanks"].includes(bucket)
+    ? {
+        size: null,
+        color: (vData.name || "").trim() || null,
+      }
+    : { size: null, color: (vData.name || "").trim() || "Default" };
 
-  // NEW: read custom attribute for print location (if defined)
-  const ca = v.customAttributeValues || {};
-  let printLocation = null;
-  if (
-    ca[PRINT_LOCATION_CA_KEY] &&
-    typeof ca[PRINT_LOCATION_CA_KEY].stringValue === "string"
-  ) {
-    printLocation = ca[PRINT_LOCATION_CA_KEY].stringValue.trim();
-  }
+      let price = 0;
+      if (vData.priceMoney && vData.priceMoney.amount != null) {
+        price = Number(vData.priceMoney.amount) / 100;
+      }
 
-  // Square variation SKU (used as barcode text)
-  const sku = vData.sku || null;
+      const ca = v.customAttributeValues || {};
+      let printLocation = null;
+      if (
+        ca[PRINT_LOCATION_CA_KEY] &&
+        typeof ca[PRINT_LOCATION_CA_KEY].stringValue === "string"
+      ) {
+        printLocation = ca[PRINT_LOCATION_CA_KEY].stringValue.trim();
+      }
 
-  return {
-    id: v.id,
-    name: vData.name,
-    price,
-    size,
-    color,
-    sku,
-    printLocation, // may be null
-    // quantity will be filled in by inventory refresh
-  };
-});
+      const sku = vData.sku || null;
 
+      const variationImageIds = Array.isArray(vData.imageIds)
+  ? vData.imageIds.filter(Boolean)
+  : [];
+
+const variationImages = variationImageIds
+  .map((id) => imageIdToUrl[id])
+  .filter(Boolean);
+
+      return {
+        id: v.id,
+        name: vData.name,
+        price,
+        ...namedOptions,
+        size: namedOptions.size||parsed.size,
+        color: namedOptions.color||parsed.color,
+        sku,
+printLocation: namedOptions.printLocation||printLocation,
+image: variationImages[0] || imageUrl || null,
+images:
+  variationImages.length > 0
+    ? variationImages
+    : imageUrl
+    ? [imageUrl]
+    : [],
+imageIds: variationImageIds,
+      };
+    });
 
     normalizedCatalog.push({
       id: item.id,
       name: rawName,
       description: data.description || "",
+      category: bucket, // "Apparel" | "Hats" | "3D" | "Other" | custom
+      categoryRaw: catInfo.categoryRaw, // raw Square category name (first match)
+      categoryIds: catInfo.categoryIds, // helpful for debugging later
       type,
       audience,
       subcategory,
@@ -1423,17 +2128,24 @@ const variations = (data.variations || []).map((v) => {
     });
   }
 
+  console.log("Catalog by category:", {
+    Apparel: countApparel,
+    Hats: countHats,
+    HatBlanks: countHatBlanks,
+    "3D": count3d,
+    Other: countOther,
+    TotalNormalized: normalizedCatalog.length,
+  });
+
   cachedCatalog = normalizedCatalog;
-  cachedBaseProducts = null; // force inventory rebuild
+  cachedBaseProducts = null;
   lastCatalogFetch = Date.now();
   lastInventoryFetch = 0;
 
-  console.log(
-    `Catalog refresh complete. Apparel items in catalog: ${cachedCatalog.length}`
-  );
+  console.log(`Catalog refresh complete. Items in catalog: ${cachedCatalog.length}`);
 }
 
-// ----- Refresh inventory only (fast; uses cached catalog) -----
+// ----- Refresh inventory only -----
 async function refreshInventoryForCatalog() {
   const inventoryApi = squareClient.inventoryApi;
 
@@ -1444,7 +2156,6 @@ async function refreshInventoryForCatalog() {
     await refreshCatalogFromSquare();
   }
 
-  // Collect all variation IDs we care about
   const allVariationIds = [];
   cachedCatalog.forEach((item) => {
     (item.variations || []).forEach((v) => {
@@ -1452,108 +2163,83 @@ async function refreshInventoryForCatalog() {
     });
   });
 
-  console.log(
-    "Refreshing inventory for variation IDs count:",
-    allVariationIds.length
-  );
+  console.log("Refreshing inventory for variation IDs count:", allVariationIds.length);
 
-  // For each variation ID, we keep ONLY the latest IN_STOCK count
   const quantityByVariationId = {};
   const latestTsByVariationId = {};
 
   if (allVariationIds.length > 0) {
     try {
-      const invResp = await inventoryApi.batchRetrieveInventoryCounts({
-        catalogObjectIds: allVariationIds,
+      for(let offset=0;offset<allVariationIds.length;offset+=1000){let cursor;do{const invResp = await inventoryApi.batchRetrieveInventoryCounts({
+        catalogObjectIds: allVariationIds.slice(offset,offset+1000),
+        cursor,
+        locationIds: [process.env.SQUARE_LOCATION_ID],
       });
 
-      const counts = invResp.result.counts || [];
+      cursor=invResp.result.cursor;const counts = invResp.result.counts || [];
       console.log("Inventory counts returned:", counts.length);
 
       for (const c of counts) {
         const varId = c.catalogObjectId;
         if (!varId) continue;
 
-        // Only consider actual in-stock counts
-        if (c.state && c.state !== "IN_STOCK") {
-          continue;
-        }
+        if (c.state && c.state !== "IN_STOCK") continue;
 
         const rawQty =
-          c.quantity !== undefined && c.quantity !== null
-            ? Number(c.quantity)
-            : 0;
+          c.quantity !== undefined && c.quantity !== null ? Number(c.quantity) : 0;
         if (Number.isNaN(rawQty)) continue;
 
-        // Use the most recent calculated/updated time
         const tsStr = c.calculatedAt || c.updatedAt || c.occurredAt || null;
         const ts = tsStr ? new Date(tsStr).getTime() : 0;
 
         const prevTs = latestTsByVariationId[varId] || 0;
         if (ts >= prevTs) {
           latestTsByVariationId[varId] = ts;
-
-          // Clamp any weird negatives to 0 just in case
           quantityByVariationId[varId] = rawQty < 0 ? 0 : rawQty;
         }
       }
+      }while(cursor);}
     } catch (invErr) {
-      console.error("Error retrieving inventory counts:", invErr);
+      throw invErr;
     }
   }
 
-  // Build new base products with safe quantities
   const newBaseProducts = cachedCatalog.map((item) => {
     const variationsWithQty = (item.variations || []).map((v) => {
       const raw = quantityByVariationId[v.id];
-
       let safeQty = 0;
       if (raw !== undefined && raw !== null) {
         const n = Number(raw);
         safeQty = Number.isNaN(n) ? 0 : n;
       }
-
-      // Extra safety: never allow negative here
       if (safeQty < 0) safeQty = 0;
 
-      return {
-        ...v,
-        quantity: safeQty,
-      };
+      return { ...v, quantity: safeQty };
     });
 
-    return {
-      ...item,
-      variations: variationsWithQty,
-    };
+    return { ...item, variations: variationsWithQty };
   });
 
   cachedBaseProducts = newBaseProducts;
+  business.checkRestocks();
   lastInventoryFetch = Date.now();
 
-  console.log(
-    `Inventory refresh complete at ${new Date(
-      lastInventoryFetch
-    ).toISOString()}`
-  );
+  console.log(`Inventory refresh complete at ${new Date(lastInventoryFetch).toISOString()}`);
 }
 
-// ----- Ensure catalog is reasonably fresh -----
 async function ensureCatalogFresh() {
+  if(process.env.NODE_ENV==='test'&&global.__BR_CATALOG_TEST__){cachedCatalog=global.__BR_CATALOG_TEST__;cachedBaseProducts=global.__BR_CATALOG_TEST__;lastCatalogFetch=Date.now();lastInventoryFetch=Date.now();return;}
   const now = Date.now();
-
   if (!cachedCatalog || cachedCatalog.length === 0) {
     await refreshCatalogFromSquare();
     return;
   }
-
   if (now - lastCatalogFetch > CATALOG_TTL_MS) {
     console.log("Catalog TTL expired; refreshing catalog from Square...");
     await refreshCatalogFromSquare();
   }
 }
 
-// ----- Ensure we have at least one inventory snapshot -----
 async function ensureInventoryInitialized() {
   if (!cachedBaseProducts) {
     console.log("No cached inventory; doing initial inventory fetch...");
@@ -1561,143 +2247,81 @@ async function ensureInventoryInitialized() {
   }
 }
 
-//
+// 
 // ============== PRODUCTS ENDPOINT ==============
-// Uses cached master list (catalog + inventory) + product flags + sorting
 //
 app.get("/products", async (req, res) => {
   console.log("HIT /products");
   try {
-    // 1) Make sure catalog exists / is fresh-ish (rare)
     await ensureCatalogFresh();
-
-    // 2) Make sure we have *some* inventory snapshot
     await ensureInventoryInitialized();
 
-    // 3) If inventory snapshot is older than INVENTORY_TTL_MS,
-    //    kick off a background refresh (but still respond immediately)
     const now = Date.now();
     if (now - lastInventoryFetch > INVENTORY_TTL_MS) {
-      console.log(
-        "Inventory TTL expired; kicking off background inventory refresh..."
-      );
+      console.log("Inventory TTL expired; kicking off background inventory refresh...");
       refreshInventoryForCatalog().catch((err) =>
-        console.error("Background inventory refresh failed:", err)
+        logError("Background inventory refresh failed:", err)
       );
     }
 
     const baseProducts = cachedBaseProducts || [];
 
-    // Attach flags from productConfig
+    // Attach flags
     let decorated = baseProducts.map((p) => {
       const flagsRaw = productConfig[p.id] || {};
       const flags = normalizeFlags(flagsRaw);
-      return { ...p, flags };
+      const metadata=business.metadata(p.id);
+      return { ...p, flags, ...metadata, builderEligible:["Hat Blanks","Blank Apparel"].includes(p.category) && !!metadata.builderEligible };
     });
 
-    // Hide from online shop if flagged
-    decorated = decorated.filter((p) => !p.flags.hideOnline);
+    // Hide online flag
+    decorated = decorated.filter((p) => !p.flags.hideOnline && !p.privateOnly);
 
-    // NEW: normalize variations for frontend
-    // - Ensure each variation has:
-    //   - priceCents (integer, in cents)
-    //   - catalogObjectId (Square variation id)
+    // Normalize variations + add priceCents
     decorated = decorated.map((p) => {
       const normalizedVariations = (p.variations || []).map((v) => {
         const priceNumber =
-          typeof v.price === "number" && !Number.isNaN(v.price)
-            ? v.price
-            : 0;
+          typeof v.price === "number" && !Number.isNaN(v.price) ? v.price : 0;
 
         return {
           ...v,
-          // Square variation id is already v.id in our catalog
           catalogObjectId: v.id,
-          // Convert dollars -> cents so frontend can use it directly
           priceCents: Math.round(priceNumber * 100),
         };
       });
 
-      return {
-        ...p,
-        variations: normalizedVariations,
-      };
+      return { ...p, variations: normalizedVariations, builderEligible: !!p.builderEligible };
     });
 
-    // NEW: hide items that are completely out of stock (all variations qty <= 0)
-    decorated = decorated.filter((p) =>
-      (p.variations || []).some((v) => (v.quantity || 0) > 0)
-    );
+    // ✅ IMPORTANT: Keep 3D items even if Square inventory count is 0/missing
+    decorated = decorated.filter((p) => {
+      const cat = String(p.category || "").trim().toUpperCase();
 
-    // Sort: pinToTop → featured → new → name A–Z
+      // 3D prints are commonly made-to-order or not tracked via inventory counts
+      if (p.fulfillmentMode === "made-to-order") return true;
+
+      // Otherwise require at least one in-stock variation
+      return (p.variations || []).some((v) => (v.quantity || 0) > 0);
+    });
+
+    // Sort pins/featured/new/name
     decorated.sort((a, b) => {
-      if (a.flags.pinToTop !== b.flags.pinToTop) {
-        return a.flags.pinToTop ? -1 : 1;
-      }
-      if (a.flags.isFeatured !== b.flags.isFeatured) {
+      if (a.flags.pinToTop !== b.flags.pinToTop) return a.flags.pinToTop ? -1 : 1;
+      if (a.flags.isFeatured !== b.flags.isFeatured)
         return a.flags.isFeatured ? -1 : 1;
-      }
-      if (a.flags.isNew !== b.flags.isNew) {
-        return a.flags.isNew ? -1 : 1;
-      }
+      if (a.flags.isNew !== b.flags.isNew) return a.flags.isNew ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
 
-    res.json(decorated);
+    return res.json(photoWatermarks.publicImages(decorated));
   } catch (error) {
-    console.error("Square / caching error in /products:", error);
-    res.status(500).json({ error: "Error loading products from Square" });
+    logError("Square / caching error in /products:", error);
+    return res.status(500).json({ error: "Error loading products from Square" });
   }
 });
 
 //
-// ============== DEBUG CATALOG ENDPOINT ==============
-// (Still talks directly to Square; dev / debug use only)
-//
-app.get("/debug-catalog", async (req, res) => {
-  try {
-    const catalogApi = squareClient.catalogApi;
-
-    let cursor = undefined;
-    const items = [];
-
-    do {
-      const resp = await catalogApi.listCatalog(cursor);
-      const objs = resp.result.objects || [];
-
-      for (const obj of objs) {
-        if (obj.type === "ITEM") {
-          items.push({
-            id: obj.id,
-            type: obj.type,
-            name: obj.itemData?.name || null,
-            categoryId: obj.itemData?.categoryId || null,
-          });
-        }
-      }
-
-      cursor = resp.result.cursor;
-    } while (cursor);
-
-    const nameFilter = (req.query.name || "").toLowerCase();
-    const filtered = nameFilter
-      ? items.filter((i) =>
-          (i.name || "").toLowerCase().includes(nameFilter)
-        )
-      : items;
-
-    res.json(filtered);
-  } catch (err) {
-    console.error("Debug error:", err);
-    res.status(500).json({
-      error: "debug-catalog failed",
-      details: err.message || String(err),
-    });
-  }
-});
-
-//
-// ===== HELPER FOR CHECKOUT NOTES (DESIGN LOCATION / PRINT SIDE) =====
+// ===== HELPER FOR CHECKOUT NOTES =====
 //
 function buildLineItemNote(item) {
   const bits = [];
@@ -1705,13 +2329,18 @@ function buildLineItemNote(item) {
   if (item.type && item.type !== "Other") bits.push(item.type);
   if (item.color) bits.push(item.color);
   if (item.size) bits.push(item.size);
+
+  // apparel print-side (front/back)
   if (item.printSide) bits.push(`Print: ${item.printSide}`);
+
+  // hats: include patch selections
+  if (item.patchName) bits.push(`Patch: ${item.patchName}`);
+  if (item.patchAlign) bits.push(`Align: ${item.patchAlign}`);
 
   return bits.join(" • ");
 }
-// ===== SERVER-SIDE INVENTORY HELPERS (for final checkout guard) =====
 
-// Safely pull quantity from a backend variation object
+// ===== SERVER-SIDE INVENTORY HELPERS (for final checkout guard) =====
 function extractQtyFromServerVariation(v) {
   if (!v) return null;
 
@@ -1731,15 +2360,12 @@ function extractQtyFromServerVariation(v) {
   for (const field of fields) {
     if (v[field] !== undefined && v[field] !== null) {
       const n = Number(v[field]);
-      if (!Number.isNaN(n)) {
-        return n;
-      }
+      if (!Number.isNaN(n)) return n;
     }
   }
   return null;
 }
 
-// Given a cart item + baseProducts, return how many we believe are available
 function getServerAvailableQtyForCartItem(cartItem, baseProducts) {
   if (!cartItem || !Array.isArray(baseProducts)) return 0;
 
@@ -1747,34 +2373,28 @@ function getServerAvailableQtyForCartItem(cartItem, baseProducts) {
   if (!productId) return 0;
 
   const product =
-    baseProducts.find(
-      (p) => p.id === productId || p.squareItemId === productId
-    ) || null;
-
+    baseProducts.find((p) => p.id === productId || p.squareItemId === productId) ||
+    null;
   if (!product) return 0;
 
-  // Prefer variation-level inventory if we can match a variation
   if (Array.isArray(product.variations) && product.variations.length > 0) {
     const varId = cartItem.squareVariationId || cartItem.catalogObjectId || null;
-
     let variation = null;
 
-    // 1) Try matching by variation ID / catalogObjectId
     if (varId) {
       variation =
         product.variations.find(
           (v) =>
             v.id === varId ||
             v.catalogObjectId === varId ||
+            v.squareCatalogObjectId === varId ||
             v.squareCatalogObjectId === varId
         ) || null;
     }
 
-    // 2) Fallback: match by color + size
     if (!variation) {
       const colorLower = (cartItem.color || "").toLowerCase();
       const sizeLower = (cartItem.size || "").toLowerCase();
-
       variation =
         product.variations.find((v) => {
           const vColor = (v.color || "").toLowerCase();
@@ -1785,22 +2405,14 @@ function getServerAvailableQtyForCartItem(cartItem, baseProducts) {
 
     if (variation) {
       const q = extractQtyFromServerVariation(variation);
-      if (typeof q === "number") {
-        return q;
-      }
+      if (typeof q === "number") return q;
     }
   }
 
-  // Fall back to product-level inventory if present
-  if (typeof product.inventory === "number") {
-    return product.inventory;
-  }
-
-  // Unknown → treat as 0 for conservative guard
+  if (typeof product.inventory === "number") return product.inventory;
   return 0;
 }
 
-// Given a SKU or variation id, find the matching variation in our cached products
 function findVariationBySkuOrId(identifier, baseProducts) {
   if (!identifier) return null;
   const needle = String(identifier).trim().toLowerCase();
@@ -1809,7 +2421,6 @@ function findVariationBySkuOrId(identifier, baseProducts) {
     for (const v of p.variations || []) {
       const sku = (v.sku || "").toLowerCase();
       const id = (v.id || "").toLowerCase();
-
       if (sku === needle || id === needle) {
         return {
           productId: p.id,
@@ -1824,363 +2435,132 @@ function findVariationBySkuOrId(identifier, baseProducts) {
       }
     }
   }
-
   return null;
 }
 
+//
 // ============== CHECKOUT ENDPOINT ==============
-// Uses adminConfig.shippingFlatRate + adminConfig.freeShippingThreshold
-// to add a "Shipping" line item to the Square Payment Link.
-// Also performs a final inventory check to prevent overselling.
+// NOW: creates Square link + inserts ONLY pending_checkouts (NOT orders)
 //
-// Line items are tied to Square catalog variations via catalogObjectId
-// so inventory is decremented correctly on Square's side. We are NOT
-// manually adding a SHIPMENT fulfillment here; instead we rely on
-// checkoutOptions.askForShippingAddress so Square creates the shipment.
+// Checkout and payment confirmation are handled by lib/business-system.js.
+
+// ===== ADMIN: REFRESH INVENTORY (THANK-YOU PING) =====
 //
-app.post("/checkout", async (req, res) => {
+app.post("/admin/refresh-inventory", requireAdmin, async (req, res) => {
   try {
-    const { cart, customer } = req.body;
-    console.log("Incoming checkout cart (backend):", cart);
-    console.log("Incoming customer:", customer);
+    console.log("[/admin/refresh-inventory] Thank-you page ping received.");
 
-    if (!Array.isArray(cart) || cart.length === 0) {
-      return res.status(400).json({ error: "Cart is empty" });
-    }
-
-    const locationId = process.env.SQUARE_LOCATION_ID;
-    if (!locationId) {
-      console.error("Missing SQUARE_LOCATION_ID in environment.");
-      return res
-        .status(500)
-        .json({ error: "Server misconfigured (no location id)." });
-    }
-
-    // ----- FINAL INVENTORY CHECK (server-side guard) -----
-    try {
-      console.log("Checkout: performing final inventory validation...");
-
-      // Make sure catalog + inventory snapshot are fresh
-      await ensureCatalogFresh();
-      await ensureInventoryInitialized();
-      await refreshInventoryForCatalog();
-
-      const baseProducts = cachedBaseProducts || [];
-      const conflicts = [];
-
-      for (const item of cart) {
-        const requestedQty =
-          Number(item.quantity || item.qty || 1) > 0
-            ? Number(item.quantity || item.qty || 1)
-            : 1;
-
-        const availableQty = getServerAvailableQtyForCartItem(
-          item,
-          baseProducts
-        );
-
-        if (availableQty <= 0 || requestedQty > availableQty) {
-          conflicts.push({
-            productId: item.id || null,
-            name: item.name || "Item",
-            color: item.color || null,
-            size: item.size || null,
-            requestedQty,
-            availableQty: Math.max(availableQty, 0),
-          });
-        }
-      }
-
-      if (conflicts.length > 0) {
-        console.warn(
-          "Checkout blocked due to out-of-stock conflicts:",
-          conflicts
-        );
-        return res.status(409).json({
-          error:
-            "Some items in your cart are no longer available in the requested quantity.",
-          type: "OUT_OF_STOCK",
-          conflicts,
-        });
-      }
-
-      console.log("Checkout: inventory validation passed.");
-    } catch (invErr) {
-      console.error("Inventory validation during checkout failed:", invErr);
-      return res.status(500).json({
-        error:
-          "We had trouble validating stock for your cart. Please refresh the page and try again.",
-      });
-    }
-
-    // ----- Build Square line items (TIE TO CATALOG VARIATIONS) -----
-    const productLineItems = cart.map((item) => {
-      const qty = item.quantity || item.qty || 1;
-      const priceCents = item.price || 0; // price already in cents from frontend
-
-      // Keep current name style with color/size in parentheses
-      const optionParts = [item.color, item.size].filter(Boolean);
-      const baseName = item.name || "Item";
-      const displayName =
-        optionParts.length > 0
-          ? `${baseName} (${optionParts.join(" / ")})`
-          : baseName;
-
-      // IMPORTANT: tie back to Square catalog so inventory is decremented.
-      const catalogObjectId =
-        item.catalogObjectId ||
-        item.squareVariationId ||
-        item.squareCatalogObjectId ||
-        null;
-
-      const lineItem = {
-        quantity: String(qty),
-        name: displayName,
-        basePriceMoney: {
-          amount: priceCents,
-          currency: "USD",
-        },
-      };
-
-      if (catalogObjectId) {
-        lineItem.catalogObjectId = catalogObjectId;
-      }
-
-      // Include design location / print side + details in the line item note
-      const note = buildLineItemNote(item);
-      if (note) {
-        lineItem.note = note;
-      }
-
-      return lineItem;
-    });
-
-    // Subtotal in cents for PRODUCTS ONLY (no shipping/fees/tax yet)
-    const subtotalCents = productLineItems.reduce(
-      (sum, li) =>
-        sum +
-        Number(li.basePriceMoney.amount) * Number(li.quantity || "1"),
-      0
-    );
-    console.log("Computed subtotal (cents):", subtotalCents);
-
-    if (subtotalCents <= 0) {
-      return res.status(400).json({ error: "Invalid cart total" });
-    }
-
-    // Start with product line items, then append shipping/fee/tax
-    const lineItems = [...productLineItems];
-
-    // ----- Shipping calculation (flat rate + free shipping) -----
-    const shippingFlat = Number(adminConfig.shippingFlatRate || 0); // dollars
-    const freeThresh =
-      adminConfig.freeShippingThreshold != null
-        ? Number(adminConfig.freeShippingThreshold)
-        : null; // dollars
-
-    let shippingCents = Math.round(shippingFlat * 100);
-
-    if (freeThresh != null && subtotalCents / 100 >= freeThresh) {
-      // qualifies for free shipping
-      shippingCents = 0;
-    }
-
-    if (shippingCents > 0) {
-      lineItems.push({
-        name: "Shipping",
-        quantity: "1",
-        basePriceMoney: {
-          amount: shippingCents,
-          currency: "USD",
-        },
-      });
-    }
-
-    // ----- 3% Convenience / Card Processing Fee -----
-    const FEE_PERCENT = 0.03;
-    const feeBaseCents = subtotalCents + shippingCents;
-    const convenienceFeeCents = Math.round(feeBaseCents * FEE_PERCENT);
-
-    if (convenienceFeeCents > 0) {
-      lineItems.push({
-        name: "Convenience Fee (3%)",
-        quantity: "1",
-        basePriceMoney: {
-          amount: convenienceFeeCents,
-          currency: "USD",
-        },
-      });
-    }
-
-    // ----- 7% Sales Tax (MS only, on items + shipping, NOT the 3% fee) -----
-    let salesTaxCents = 0;
-
-    const shippingState = (customer?.state || "")
-      .toString()
-      .trim()
-      .toUpperCase();
-
-    if (shippingState === "MS") {
-      const SALES_TAX_RATE = 0.07;
-      const taxBaseCents = subtotalCents + shippingCents;
-      salesTaxCents = Math.round(taxBaseCents * SALES_TAX_RATE);
-    }
-
-    if (salesTaxCents > 0) {
-      lineItems.push({
-        name: "Sales Tax (7%)",
-        quantity: "1",
-        basePriceMoney: {
-          amount: salesTaxCents,
-          currency: "USD",
-        },
-      });
-    }
-
-    const totalCents =
-      subtotalCents + shippingCents + convenienceFeeCents + salesTaxCents;
-
-    console.log(
-      "Grand total (cents) including shipping + fee + tax:",
-      totalCents
-    );
-
-    const checkoutApi = squareClient.checkoutApi;
-    const idempotencyKey = crypto.randomUUID();
-
-    // No manual fulfillments; rely on askForShippingAddress so Square
-    // creates a SHIPMENT fulfillment automatically.
-    const checkoutBody = {
-      idempotencyKey,
-      order: {
-        locationId,
-        lineItems,
-      },
-      checkoutOptions: {
-        redirectUrl:
-          process.env.CHECKOUT_REDIRECT_URL ||
-          "https://shopsugarplum.co/thank-you.html",
-
-        // This causes Square to treat the order as a shipping order
-        askForShippingAddress: true,
-
-        // Pre-fill email & shipping address from the customer's form
-        prePopulateBuyerEmail: customer?.email || undefined,
-        shippingAddress: {
-          addressLine1: customer?.address1 || undefined,
-          addressLine2: customer?.address2 || undefined,
-          locality: customer?.city || undefined,
-          administrativeDistrictLevel1: customer?.state || undefined,
-          postalCode: customer?.postalCode || undefined,
-          country: "US",
-        },
-      },
-    };
-
-    const response = await checkoutApi.createPaymentLink(checkoutBody);
-    const paymentLink = response.result.paymentLink;
-
-    if (!paymentLink || !paymentLink.url) {
-      console.error("No paymentLink.url in Square response:", response.result);
-      return res
-        .status(500)
-        .json({ error: "Failed to create Square payment link." });
-    }
+    await ensureCatalogFresh();
+    await ensureInventoryInitialized();
+    await refreshInventoryForCatalog();
 
     const now = new Date().toISOString();
+    console.log("[/admin/refresh-inventory] Inventory refresh completed at", now);
 
-    const shippingInfo = {
-      name: customer?.name || null,
-      email: customer?.email || null,
-      phone: customer?.phone || null,
-      address1: customer?.address1 || null,
-      address2: customer?.address2 || null,
-      city: customer?.city || null,
-      state: customer?.state || null,
-      zip: customer?.postalCode || null,
-      subtotalCents,
-      shippingCents,
-      convenienceFeeCents,
-      salesTaxCents,
-      totalCents,
-    };
-
-    const insert = db.prepare(`
-      INSERT INTO orders (
-        square_order_id,
-        square_payment_link_id,
-        customer_name,
-        customer_email,
-        status,
-        tracking_number,
-        items_json,
-        total_money,
-        currency,
-        created_at,
-        updated_at,
-        shipping_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insert.run(
-      paymentLink.orderId || null,
-      paymentLink.id,
-      customer?.name || null,
-      customer?.email || null,
-      "PENDING",
-      null,
-      JSON.stringify(cart),
-      totalCents,
-      "USD",
-      now,
-      now,
-      JSON.stringify(shippingInfo)
-    );
-
-    // Order email (no payment button, payment is via Square)
-    if (customer?.email) {
-      try {
-        const introLine = `Hi ${
-          customer.name || "there"
-        }, your order has been created. An order confirmation email will follow after the payment has been verified on Square. Thank you for your purchase!`;
-
-        const emailHtml = buildBrandedEmail({
-          title: "Order Created",
-          intro: introLine,
-          lines: [
-            `Order total: $${(totalCents / 100).toFixed(2)}${
-              shippingCents === 0 ? " (includes FREE shipping)" : ""
-            }`,
-          ],
-          footerNote: "Thank you for supporting our small business!",
-        });
-
-        await sendEmail({
-          to: customer.email,
-          subject: "We received your order – Sugar Plum Creations",
-          html: emailHtml,
-          bcc: EMAIL_OWNER || undefined,
-        });
-      } catch (mailErr) {
-        console.error("Failed to send order confirmation email:", mailErr);
-      }
-    }
-
-    res.json({ checkoutUrl: paymentLink.url });
+    return res.json({ ok: true, refreshedAt: now });
   } catch (err) {
-    console.error("Error in /checkout:", err.response?.body || err);
-    res.status(500).json({ error: "Failed to start checkout" });
+    logError("[/admin/refresh-inventory] Failed to refresh inventory:", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Failed to refresh inventory snapshot." });
   }
 });
 
-// Admin: products + full variations for barcode tools (includes zero inventory)
+// ===== Admin Config =====
+// OPTIONAL HARDENING: requireAdmin on GET to avoid exposing admin settings publicly
+app.get("/admin/config", requireAdmin, (req, res) => res.json(adminConfig));
+
+app.put("/admin/config", requireAdmin, (req, res) => {
+  const {
+    bannerText,
+    bannerVisible,
+    popupEnabled,
+    popupMode,
+    popupCustomText,
+    shippingFlatRate,
+    freeShippingThreshold,
+  } = req.body || {};
+
+  adminConfig.bannerText = typeof bannerText === "string" ? bannerText : "";
+  adminConfig.bannerVisible = !!bannerVisible;
+
+  if (typeof popupEnabled === "boolean") adminConfig.popupEnabled = popupEnabled;
+  if (typeof popupMode === "string") adminConfig.popupMode = popupMode;
+  if (typeof popupCustomText === "string") adminConfig.popupCustomText = popupCustomText;
+
+  if (shippingFlatRate !== undefined) {
+    const v = Number(shippingFlatRate);
+    adminConfig.shippingFlatRate = isNaN(v) ? 0 : v;
+  }
+  if (freeShippingThreshold !== undefined) {
+    const v = Number(freeShippingThreshold);
+    adminConfig.freeShippingThreshold = isNaN(v) ? 0 : v;
+  }
+
+  saveAdminConfig();
+  res.json({ ok: true, config: adminConfig });
+});
+
+// ===== Admin: Products list + flags =====
+app.get("/admin/products", requireAdmin, async (req, res) => {
+  try {
+    await ensureCatalogFresh();
+    await ensureInventoryInitialized();
+
+    const baseProducts = cachedBaseProducts || [];
+    const products = baseProducts.map((p) => {
+      const flags = normalizeFlags(productConfig[p.id] || {});
+      const totalInventory = (p.variations || []).reduce(
+        (sum, v) => sum + (v.quantity || 0),
+        0
+      );
+      return {
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        subcategory: p.subcategory || null,
+        totalInventory,
+        flags,
+      };
+    });
+
+    products.sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ products, lastCatalogFetch, lastInventoryFetch });
+  } catch (err) {
+    logError("Error in /admin/products:", err);
+    res.status(500).json({ error: "Failed to load admin products." });
+  }
+});
+
+app.put("/admin/products", requireAdmin, (req, res) => {
+  const body = req.body || {};
+  const updates = Array.isArray(body.products) ? body.products : null;
+
+  if (!updates) {
+    return res
+      .status(400)
+      .json({ error: "Request body must include products array." });
+  }
+
+  updates.forEach((u) => {
+    if (!u || !u.id) return;
+    const existing = productConfig[u.id] || {};
+    const incomingFlags = u.flags || {};
+    productConfig[u.id] = normalizeFlags({ ...existing, ...incomingFlags });
+  });
+
+  saveProductConfig();
+  res.json({ ok: true, productConfig });
+});
+
+// ===== Admin: barcode-products =====
 app.get("/admin/barcode-products", requireAdmin, async (req, res) => {
   try {
     await ensureCatalogFresh();
     await ensureInventoryInitialized();
 
     const baseProducts = cachedBaseProducts || [];
-
     const products = baseProducts.map((p) => ({
       id: p.id,
       name: p.name,
@@ -2193,44 +2573,18 @@ app.get("/admin/barcode-products", requireAdmin, async (req, res) => {
         size: v.size || null,
         color: v.color || null,
         quantity:
-          typeof v.quantity === "number" && !Number.isNaN(v.quantity)
-            ? v.quantity
-            : 0,
+          typeof v.quantity === "number" && !Number.isNaN(v.quantity) ? v.quantity : 0,
       })),
     }));
 
-    res.json({
-      products,
-      lastCatalogFetch,
-      lastInventoryFetch,
-    });
+    res.json({ products, lastCatalogFetch, lastInventoryFetch });
   } catch (err) {
-    console.error("Error in /admin/barcode-products:", err);
+    logError("Error in /admin/barcode-products:", err);
     res.status(500).json({ error: "Failed to load barcode products." });
   }
 });
 
 // ===== ADMIN: APPLY INVENTORY COUNTS (DELTA MODE) =====
-//
-// Frontend payload (from barcode / scanner UI) still looks like:
-//
-// {
-//   "mode": "set_absolute",   // ignored now, kept for compatibility
-//   "updates": [
-//     { "sku": "4073372", "newQty": 5 },
-//     { "catalogObjectId": "VARIATION_ID_HERE", "newQty": -2 }
-//   ]
-// }
-//
-// BUT HERE we treat `newQty` as a **DELTA** (±), not an absolute quantity:
-//
-//   newAbsoluteQty = max(currentQtyFromSquare + newQty, 0)
-//
-// Then we send a PHYSICAL_COUNT to Square with `quantity = newAbsoluteQty`.
-//
-// This means if Square currently has 5 in stock and you enter 3,
-// we will set the final stock to 8, not overwrite it to 3.
-//
 async function handleInventoryDelta(req, res) {
   console.log(
     "[/admin/apply-inventory-count] DELTA HANDLER body:",
@@ -2239,21 +2593,19 @@ async function handleInventoryDelta(req, res) {
 
   try {
     const { updates } = req.body || {};
-
     if (!Array.isArray(updates) || updates.length === 0) {
-      return res.status(400).json({
-        error: "Request body must include updates array.",
-      });
+      return res
+        .status(400)
+        .json({ error: "Request body must include updates array." });
     }
 
     const locationId = process.env.SQUARE_LOCATION_ID;
     if (!locationId) {
-      return res.status(500).json({
-        error: "SQUARE_LOCATION_ID is not configured on the server.",
-      });
+      return res
+        .status(500)
+        .json({ error: "SQUARE_LOCATION_ID is not configured on the server." });
     }
 
-    // 🧠 Always base deltas on a fresh snapshot from Square
     await ensureCatalogFresh();
     await ensureInventoryInitialized();
     await refreshInventoryForCatalog();
@@ -2272,7 +2624,6 @@ async function handleInventoryDelta(req, res) {
     for (const raw of updates) {
       if (!raw) continue;
 
-      // Treat newQty as DELTA (±)
       const deltaRaw =
         raw.newQty != null
           ? Number(raw.newQty)
@@ -2283,16 +2634,13 @@ async function handleInventoryDelta(req, res) {
       if (!Number.isFinite(deltaRaw) || deltaRaw === 0) {
         errors.push({
           input: raw,
-          error:
-            "Missing or invalid delta in newQty (must be a non-zero number).",
+          error: "Missing or invalid delta in newQty (must be a non-zero number).",
         });
         continue;
       }
 
-      // identifier can be SKU or catalogObjectId/variationId
       const identifier =
         raw.catalogObjectId || raw.variationId || raw.sku || raw.SKU;
-
       if (!identifier) {
         errors.push({
           input: raw,
@@ -2301,7 +2649,6 @@ async function handleInventoryDelta(req, res) {
         continue;
       }
 
-      // NOTE: our helper is (identifier, baseProducts)
       const match = findVariationBySkuOrId(identifier, baseProducts);
       if (!match) {
         errors.push({
@@ -2313,17 +2660,14 @@ async function handleInventoryDelta(req, res) {
       }
 
       const currentQtyNum =
-        typeof match.currentQty === "number" &&
-        !Number.isNaN(match.currentQty)
+        typeof match.currentQty === "number" && !Number.isNaN(match.currentQty)
           ? match.currentQty
           : 0;
 
-      // 🔢 Square's true current qty + your delta
       let newQty = currentQtyNum + deltaRaw;
       if (newQty < 0) newQty = 0;
       newQty = Math.floor(newQty);
 
-      // If no change, just log it and skip sending a Square change
       if (newQty === currentQtyNum) {
         applied.push({
           input: raw,
@@ -2341,7 +2685,6 @@ async function handleInventoryDelta(req, res) {
 
       const occurredAt = new Date().toISOString();
 
-      // PHYSICAL_COUNT with the **absolute** final quantity
       changes.push({
         type: "PHYSICAL_COUNT",
         physicalCount: {
@@ -2374,16 +2717,12 @@ async function handleInventoryDelta(req, res) {
       });
     }
 
-    const result = await inventoryApi.batchChangeInventory({
-      idempotencyKey,
-      changes,
-    });
+    const result = await inventoryApi.batchChangeInventory({ idempotencyKey, changes });
 
-    // Refresh cache after applying, so admin views stay in sync
     try {
       await refreshInventoryForCatalog();
     } catch (refreshErr) {
-      console.error(
+      logError(
         "Inventory refresh after /admin/apply-inventory-count failed:",
         refreshErr
       );
@@ -2398,7 +2737,7 @@ async function handleInventoryDelta(req, res) {
       squareResult: result.result || null,
     });
   } catch (err) {
-    console.error("Error in /admin/apply-inventory-count (delta):", err);
+    logError("Error in /admin/apply-inventory-count (delta):", err);
     return res.status(500).json({
       error: "Failed to apply inventory counts (delta mode).",
       details: err.message || String(err),
@@ -2406,372 +2745,15 @@ async function handleInventoryDelta(req, res) {
   }
 }
 
-// Main route used by the admin UI (Send to Square button)
-app.post(
-  "/admin/apply-inventory-count",
-  requireAdmin,
-  (req, res) => {
-    handleInventoryDelta(req, res);
-  }
+app.post("/admin/apply-inventory-count", requireAdmin, (req, res) =>
+  handleInventoryDelta(req, res)
 );
-
-// Alias route (for future /admin/inventory/apply usage)
-app.post(
-  "/admin/inventory/apply",
-  requireAdmin,
-  (req, res) => {
-    handleInventoryDelta(req, res);
-  }
+app.post("/admin/inventory/apply", requireAdmin, (req, res) =>
+  handleInventoryDelta(req, res)
 );
-
-// ===== ADMIN: REFRESH INVENTORY (THANK-YOU PING) =====
-// Called by thank-you.html after a successful Square checkout.
-// Safely refreshes catalog + inventory snapshot so the shop reflects
-// the latest stock as soon as possible.
-app.post("/admin/refresh-inventory", async (req, res) => {
-  try {
-    console.log("[/admin/refresh-inventory] Thank-you page ping received.");
-
-    // Make sure our catalog + inventory caches are fresh
-    await ensureCatalogFresh();
-    await ensureInventoryInitialized();
-    await refreshInventoryForCatalog();
-
-    const now = new Date().toISOString();
-    console.log(
-      "[/admin/refresh-inventory] Inventory refresh completed at",
-      now
-    );
-
-    return res.json({ ok: true, refreshedAt: now });
-  } catch (err) {
-    console.error(
-      "[/admin/refresh-inventory] Failed to refresh inventory:",
-      err
-    );
-    return res.status(500).json({
-      ok: false,
-      error: "Failed to refresh inventory snapshot.",
-    });
-  }
-});
-
-// ===== DEBUG: test email endpoint =====
-app.get("/debug/email-test", async (req, res) => {
-  try {
-    const to = process.env.EMAIL_OWNER || process.env.EMAIL_FROM;
-
-    if (!to) {
-      return res
-        .status(500)
-        .json({ error: "EMAIL_OWNER or EMAIL_FROM not set" });
-    }
-
-    const testHtml = `
-      <p><strong>Brevo SMTP Test</strong></p>
-      <p>This email confirms your Brevo SMTP is working for Sugar Plum Creations.</p>
-    `;
-
-    if (!mailTransporter) {
-      return res
-        .status(500)
-        .json({ error: "Mail transporter not configured" });
-    }
-
-    await mailTransporter.sendMail({
-      from: `"Sugar Plum Creations" <${FROM_EMAIL}>`,
-      to,
-      subject: "Sugar Plum – Brevo SMTP Test",
-      html: testHtml,
-    });
-
-    res.json({ ok: true, to });
-  } catch (err) {
-    console.error("Email test error:", err);
-    res.status(500).json({
-      error: "Failed to send test email",
-      details: err.message,
-    });
-  }
-});
-
-// ===== DEBUG: sample customer email (PAID / SHIPPED) =====
-app.get("/debug/email-sample", async (req, res) => {
-  try {
-    if (!mailTransporter) {
-      return res
-        .status(500)
-        .json({ error: "Mail transporter not configured" });
-    }
-
-    // ?type=paid or ?type=shipped (default = paid)
-    const typeRaw = (req.query.type || "paid").toString().toUpperCase();
-    const type = typeRaw === "SHIPPED" ? "SHIPPED" : "PAID";
-
-    // you can override recipient with ?to=some@email
-    const to = req.query.to || EMAIL_OWNER || EMAIL_FROM;
-
-    if (!to) {
-      return res.status(500).json({
-        error:
-          "No recipient email found. Set EMAIL_OWNER or EMAIL_FROM, or pass ?to= email.",
-      });
-    }
-
-    // Fake order for preview
-    const fakeOrder = {
-      id: 1234,
-      customer_name: "Sample Customer",
-      customer_email: to,
-      status: type,
-      total_amount: 5600, // $56.00 in cents
-      tracking_number:
-        type === "SHIPPED" ? "9400 1000 0000 0000 0000 00" : "",
-      items_json: JSON.stringify([
-        {
-          name: "Ducks Bucks & Trucks Tee",
-          quantity: 1,
-          price: 2600, // $26.00
-        },
-        {
-          name: "Merry & Bright Hoodie",
-          quantity: 1,
-          price: 3000, // $30.00
-        },
-      ]),
-    };
-
-    await sendCustomerStatusEmail(fakeOrder, type);
-
-    res.json({
-      ok: true,
-      to,
-      sampleType: type,
-      message: `Sample ${type} email sent to ${to}`,
-    });
-  } catch (err) {
-    console.error("Email sample error:", err);
-    res.status(500).json({
-      error: "Failed to send sample email",
-      details: err.message,
-    });
-  }
-});
-
-// ===== Simple Admin Auth =====
-function requireAdmin(req, res, next) {
-  if (process.env.NODE_ENV !== "production") {
-    // Dev mode: skip auth locally
-    return next();
-  }
-
-  if (req.session && req.session.isAdmin) {
-    return next();
-  }
-  return res.status(401).json({ error: "Not authorized" });
-}
-
-app.post("/admin/login", (req, res) => {
-  const { username, password } = req.body || {};
-
-  if (
-    username === process.env.ADMIN_USERNAME &&
-    password === process.env.ADMIN_PASSWORD
-  ) {
-    req.session.isAdmin = true;
-    return res.json({ ok: true });
-  }
-
-  return res.status(401).json({ error: "Invalid username or password." });
-});
-
-app.post("/admin/logout", (req, res) => {
-  if (req.session) {
-    req.session.destroy(() => {});
-  }
-  res.json({ ok: true });
-});
-
-app.get("/admin/me", (req, res) => {
-  if (req.session && req.session.isAdmin) {
-    return res.json({ isAdmin: true });
-  }
-  return res.status(401).json({ error: "Not authorized" });
-});
-
-// ===== Admin Routes =====
-
-// Get current banner + popup + shipping config (public – used by frontend)
-app.get("/admin/config", (req, res) => {
-  res.json(adminConfig);
-});
-
-// Update banner + popup config + shipping settings (protected)
-app.put("/admin/config", requireAdmin, (req, res) => {
-  const {
-    bannerText,
-    bannerVisible,
-    popupEnabled,
-    popupMode,
-    popupCustomText,
-    shippingFlatRate,
-    freeShippingThreshold,
-  } = req.body || {};
-
-  adminConfig.bannerText = typeof bannerText === "string" ? bannerText : "";
-  adminConfig.bannerVisible = !!bannerVisible;
-
-  if (typeof popupEnabled === "boolean") {
-    adminConfig.popupEnabled = popupEnabled;
-  }
-  if (typeof popupMode === "string") {
-    adminConfig.popupMode = popupMode;
-  }
-  if (typeof popupCustomText === "string") {
-    adminConfig.popupCustomText = popupCustomText;
-  }
-
-  // Shipping settings (numbers in dollars)
-  if (shippingFlatRate !== undefined) {
-    const v = Number(shippingFlatRate);
-    adminConfig.shippingFlatRate = isNaN(v) ? 0 : v;
-  }
-  if (freeShippingThreshold !== undefined) {
-    const v = Number(freeShippingThreshold);
-    adminConfig.freeShippingThreshold = isNaN(v) ? 0 : v;
-  }
-
-  saveAdminConfig();
-  res.json({ ok: true, config: adminConfig });
-});
-
-//
-// ===== Admin: Products & Sync (uses cached master list) =====
-//
-
-// Admin: trigger full catalog + inventory sync now
-app.post("/admin/sync/catalog", requireAdmin, async (req, res) => {
-  try {
-    await refreshCatalogFromSquare();
-    await refreshInventoryForCatalog();
-
-    const itemCount = cachedCatalog ? cachedCatalog.length : 0;
-    let variationCount = 0;
-    if (cachedCatalog) {
-      cachedCatalog.forEach((p) => {
-        variationCount += (p.variations || []).length;
-      });
-    }
-
-    res.json({
-      ok: true,
-      message: "Catalog + inventory sync completed.",
-      catalogItems: itemCount,
-      variationCount,
-      lastCatalogFetch,
-      lastInventoryFetch,
-    });
-  } catch (err) {
-    console.error("Error in /admin/sync/catalog:", err);
-    res.status(500).json({ error: "Failed to sync catalog." });
-  }
-});
-
-// Admin: trigger inventory-only sync now
-app.post("/admin/sync/inventory", requireAdmin, async (req, res) => {
-  try {
-    await refreshInventoryForCatalog();
-
-    let variationCount = 0;
-    if (cachedBaseProducts) {
-      cachedBaseProducts.forEach((p) => {
-        variationCount += (p.variations || []).length;
-      });
-    }
-
-    res.json({
-      ok: true,
-      message: "Inventory sync completed.",
-      lastInventoryFetch,
-      variationCount,
-    });
-  } catch (err) {
-    console.error("Error in /admin/sync/inventory:", err);
-    res.status(500).json({ error: "Failed to sync inventory." });
-  }
-});
-
-// Admin: products list + flags (for inventory/feature UI)
-app.get("/admin/products", requireAdmin, async (req, res) => {
-  try {
-    await ensureCatalogFresh();
-    await ensureInventoryInitialized();
-
-    const baseProducts = cachedBaseProducts || [];
-
-    const products = baseProducts.map((p) => {
-      const flags = normalizeFlags(productConfig[p.id] || {});
-      const totalInventory = (p.variations || []).reduce(
-        (sum, v) => sum + (v.quantity || 0),
-        0
-      );
-      return {
-        id: p.id,
-        name: p.name,
-        type: p.type,
-        subcategory: p.subcategory || null,
-        totalInventory,
-        flags,
-      };
-    });
-
-    // Sort by name alphabetically
-    products.sort((a, b) => a.name.localeCompare(b.name));
-
-    res.json({
-      products,
-      lastCatalogFetch,
-      lastInventoryFetch,
-    });
-  } catch (err) {
-    console.error("Error in /admin/products:", err);
-    res.status(500).json({ error: "Failed to load admin products." });
-  }
-});
-
-// Admin: update product flags (isNew, isFeatured, pinToTop, hides, ribbon)
-app.put("/admin/products", requireAdmin, (req, res) => {
-  const body = req.body || {};
-  const updates = Array.isArray(body.products) ? body.products : null;
-
-  if (!updates) {
-    return res
-      .status(400)
-      .json({ error: "Request body must include products array." });
-  }
-
-  updates.forEach((u) => {
-    if (!u || !u.id) return;
-
-    const existing = productConfig[u.id] || {};
-    const incomingFlags = u.flags || {};
-
-    const merged = normalizeFlags({
-      ...existing,
-      ...incomingFlags,
-    });
-
-    productConfig[u.id] = merged;
-  });
-
-  saveProductConfig();
-
-  res.json({ ok: true, productConfig });
-});
-
 
 // ========== ADMIN: GENERATE BARCODES (PDF / PRINT / BOTH) ==========
-app.post("/admin/generate-barcodes", async (req, res) => {
+app.post("/admin/generate-barcodes", requireAdmin, async (req, res) => {
   try {
     const { items = [], mode } = req.body || {};
 
@@ -2783,11 +2765,9 @@ app.post("/admin/generate-barcodes", async (req, res) => {
     const doPrint = modeNormalized === "print" || modeNormalized === "both";
     const doPdf = modeNormalized === "pdf" || modeNormalized === "both";
 
-    // -------------------------------------
-    // ⭐ BUILD ONE BIG TSPL BATCH FOR PRINT
-    // -------------------------------------
     let fullBatchTspl = "";
 
+    if (doPrint && process.env.PRINT_LOCAL_ENABLED !== "true") return res.status(409).json({error:"Direct printing is disabled. Download the label PDF, or enable PRINT_LOCAL_ENABLED on the local printer computer."});
     if (doPrint) {
       console.log(">>> /admin/generate-barcodes: PRINT mode (batch)");
 
@@ -2795,30 +2775,23 @@ app.post("/admin/generate-barcodes", async (req, res) => {
         const sku = item.sku || "";
         const labelText = item.labelText || "";
         const qty = Number(item.quantity) || 1;
-
         if (!qty || qty <= 0) continue;
 
-        console.log(`Adding SKU=${sku}, qty=${qty} to batch`);
-
-        // Uses your updated 2x1 TSPL builder with GAP 3mm
         const tspl = buildTsplForItem(sku, labelText, qty);
         fullBatchTspl += tspl;
       }
 
       if (!fullBatchTspl.trim()) {
-        return res.status(400).json({
-          error: "Nothing to print (no labels with qty > 0).",
-        });
+        return res
+          .status(400)
+          .json({ error: "Nothing to print (no labels with qty > 0)." });
       }
 
-      console.log("Opening COM3 once and sending full batch...");
+      console.log("Opening printer once and sending full batch...");
       await sendToPrinter(fullBatchTspl);
-      console.log("COM3 batch print complete.");
+      console.log("Batch print complete.");
     }
 
-    // -------------------------------------
-    // ⭐ PDF MODE (unchanged)
-    // -------------------------------------
     if (doPdf) {
       console.log(">>> /admin/generate-barcodes: PDF mode");
 
@@ -2829,10 +2802,7 @@ app.post("/admin/generate-barcodes", async (req, res) => {
       }
 
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        'attachment; filename="labels.pdf"'
-      );
+      res.setHeader("Content-Disposition", 'attachment; filename="labels.pdf"');
 
       const doc = new PDFDocument({ autoFirstPage: false, margin: 36 });
       doc.pipe(res);
@@ -2871,7 +2841,6 @@ app.post("/admin/generate-barcodes", async (req, res) => {
               doc.image(barcodeBuffer, x + 8, currentY, {
                 width: LABEL_WIDTH_2x1 - 16,
               });
-
               currentY += 40;
             } catch (err) {
               doc.fontSize(9).text(`|| ${sku} ||`, x + 8, currentY, {
@@ -2899,20 +2868,16 @@ app.post("/admin/generate-barcodes", async (req, res) => {
       return;
     }
 
-    // PRINT only
     return res.json({
       ok: true,
       message: "Labels processed (print batch complete).",
       mode: modeNormalized,
     });
-
   } catch (err) {
-    console.error("Error in /admin/generate-barcodes:", err);
+    logError("Error in /admin/generate-barcodes:", err);
     res.status(500).json({ error: "Failed to generate barcodes." });
   }
 });
-
-
 
 //
 // ===== Admin: Orders from local DB (NOT from Square) =====
@@ -2924,13 +2889,9 @@ function resolveOrderId(rawId) {
   const trimmed = String(rawId).trim();
   if (!trimmed) return null;
 
-  // If it's a positive integer, use it directly
   const asNumber = Number(trimmed);
-  if (!Number.isNaN(asNumber) && asNumber > 0) {
-    return asNumber;
-  }
+  if (!Number.isNaN(asNumber) && asNumber > 0) return asNumber;
 
-  // Otherwise, try to resolve via Square IDs
   try {
     const lookup = db
       .prepare(
@@ -2943,17 +2904,21 @@ function resolveOrderId(rawId) {
       )
       .get(trimmed, trimmed);
 
-    if (lookup && lookup.id) {
-      return lookup.id;
-    }
+    if (lookup && lookup.id) return lookup.id;
   } catch (err) {
-    console.error("Error resolving order id from Square IDs:", err);
+    logError("Error resolving order id from Square IDs:", err);
   }
 
   return null;
 }
 
-// List recent orders (for admin dashboard)
+// Payment evidence is separate from editable fulfillment. Legacy defaults are not proof of payment.
+function orderPaymentState(row) {
+  const verified=!!db.prepare('SELECT 1 FROM processed_payments WHERE local_order_id=? AND square_payment_id IS NOT NULL AND square_payment_id != ?').get(row.id,'');
+  return {paymentStatus:verified ? (row.payment_status || 'UNKNOWN') : 'UNVERIFIED',refundedCents:Number(row.refunded_cents)||0};
+}
+
+// List recent orders
 app.get("/admin/orders", requireAdmin, (req, res) => {
   try {
     const stmt = db.prepare(`
@@ -2964,6 +2929,8 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
         customer_name,
         customer_email,
         status,
+        payment_status,
+        refunded_cents,
         tracking_number,
         total_money,
         currency,
@@ -2979,10 +2946,7 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
 
     const orders = rows.map((row) => {
       let total = null;
-      if (row.total_money != null) {
-        total = Number(row.total_money) / 100;
-      }
-
+      if (row.total_money != null) total = Number(row.total_money) / 100;
       return {
         id: row.id,
         createdAt: row.created_at,
@@ -2990,6 +2954,7 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
         customerEmail: row.customer_email,
         total,
         status: row.status || "PENDING",
+        ...orderPaymentState(row),
         trackingNumber: row.tracking_number || "",
         currency: row.currency || "USD",
         squareOrderId: row.square_order_id,
@@ -2999,74 +2964,12 @@ app.get("/admin/orders", requireAdmin, (req, res) => {
 
     res.json({ orders });
   } catch (err) {
-    console.error("Error fetching local orders:", err);
+    logError("Error fetching local orders:", err);
     res.status(500).json({ error: "Failed to load orders." });
   }
 });
 
-
-// ========== ADMIN: TEST BARCODE PRINT (2x1 label, tuned +6mm upward) ==========
-app.all("/admin/print-barcode-test", async (req, res) => {
-  try {
-    console.log(">>> /admin/print-barcode-test HIT via", req.method);
-
-    const sku = "TEST-001";
-    const labelText = "Jazz Tee - Red XL";
-    const quantity = 1; // one per click
-
-    // ORIGINAL Y positions:
-    // BARCODE_Y = 30
-    // SKU_TEXT_Y = 115
-    // DESC1_Y   = 145
-    //
-    // SHIFT UPWARD BY +48 DOTS (≈6 mm)
-    const SHIFT = 48;
-
-    const BARCODE_Y  = 30  + SHIFT;   // becomes 78
-    const SKU_TEXT_Y = 115 + SHIFT;   // becomes 163
-    const DESC1_Y    = 145 + SHIFT;   // becomes 193
-
-    const tsplLines = [
-      // 2" wide (~50mm) x 1" tall (25mm) with 3mm gap between labels
-      "SIZE 50 mm,25 mm",
-      "GAP 3 mm,0 mm",
-      "DIRECTION 1",
-      "CLS",
-
-      // Barcode (shifted up 6mm)
-      `BARCODE 40,${BARCODE_Y},"128",90,0,0,3,6,"${sku}"`,
-
-      // SKU text just under barcode (shifted up 6mm)
-      `TEXT 80,${SKU_TEXT_Y},"3",0,1,1,"${sku}"`,
-
-      // Description (shifted up 6mm)
-      `TEXT 40,${DESC1_Y},"3",0,1,1,"${labelText}"`,
-
-      // Print N copies of this single label
-      `PRINT 1,${quantity}`
-    ];
-
-    const tsplCommand = tsplLines.join("\r\n") + "\r\n";
-
-    await sendToPrinter(tsplCommand);
-
-    console.log(">>> Test barcode TSPL sent to printer.");
-    res.json({ ok: true, message: "Test barcode sent to printer." });
-  } catch (err) {
-    console.error("Error in /admin/print-barcode-test:", err);
-    res.status(500).json({ error: "Failed to send test barcode to printer." });
-  }
-});
-
-
-
-
-
-
-// =========================
 // ARCHIVE DOWNLOAD ROUTE
-// MUST be placed BEFORE /admin/orders/:id
-// =========================
 app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
   try {
     const stmt = db.prepare(`
@@ -3077,6 +2980,8 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
         customer_name,
         customer_email,
         status,
+        payment_status,
+        refunded_cents,
         tracking_number,
         items_json,
         shipping_json,
@@ -3091,28 +2996,22 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
 
     const rows = stmt.all();
 
-    if (rows == null || rows.length === 0) {
-      return res.status(200).json({
-        ok: true,
-        message: "No archived orders to download.",
-      });
+    if (!rows || rows.length === 0) {
+      return res
+        .status(200)
+        .json({ ok: true, message: "No archived orders to download." });
     }
 
-    // Make sure exports dir exists
-    if (!fs.existsSync(EXPORTS_DIR)) {
-      fs.mkdirSync(EXPORTS_DIR, { recursive: true });
-    }
+    if (!fs.existsSync(EXPORTS_DIR)) fs.mkdirSync(EXPORTS_DIR, { recursive: true });
 
     const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    const stamp = `${year}-${month}-${day}`;
-
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(now.getDate()).padStart(2, "0")}`;
     const zipName = `orders-archive-${stamp}.zip`;
     const zipPath = path.join(EXPORTS_DIR, zipName);
 
-    // Create the zip file with a single JSON file inside
     await new Promise((resolve, reject) => {
       const output = fs.createWriteStream(zipPath);
       const archive = archiver("zip", { zlib: { level: 9 } });
@@ -3128,43 +3027,27 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
       archive.finalize();
     });
 
-    // Send the zip as a download, then clean up
     res.setHeader("Content-Type", "application/zip");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${zipName}"`
-    );
+    res.setHeader("Content-Disposition", `attachment; filename="${zipName}"`);
 
     const readStream = fs.createReadStream(zipPath);
 
     readStream.on("close", () => {
-      // Delete the temp zip file
       try {
         fs.unlinkSync(zipPath);
       } catch (e) {
-        console.error("Failed to delete temp orders archive zip:", e);
+        logError("Failed to delete temp orders archive zip:", e);
       }
 
-      // Remove archived orders from DB
-      try {
-        const deleteStmt = db.prepare(
-          `DELETE FROM orders WHERE status = 'ARCHIVED'`
-        );
-        deleteStmt.run();
-        console.log("Archived orders deleted from DB after download.");
-      } catch (dbErr) {
-        console.error("Failed to delete archived orders from DB:", dbErr);
-      }
+      // Export never deletes order history.
+
     });
 
     readStream.pipe(res);
   } catch (err) {
-    console.error("Error generating archived orders download:", err);
-    if (!res.headersSent) {
-      res.status(500).json({
-        error: "Failed to generate archived orders download.",
-      });
-    }
+    logError("Error generating archived orders download:", err);
+    if (!res.headersSent)
+      res.status(500).json({ error: "Failed to generate archived orders download." });
   }
 });
 
@@ -3172,9 +3055,7 @@ app.get("/admin/orders/archive-download", requireAdmin, async (req, res) => {
 app.get("/admin/orders/:id", requireAdmin, (req, res) => {
   try {
     const id = resolveOrderId(req.params.id);
-    if (!id) {
-      return res.status(400).json({ error: "Invalid order id." });
-    }
+    if (!id) return res.status(400).json({ error: "Invalid order id." });
 
     const stmt = db.prepare(`
       SELECT
@@ -3184,6 +3065,8 @@ app.get("/admin/orders/:id", requireAdmin, (req, res) => {
         customer_name,
         customer_email,
         status,
+        payment_status,
+        refunded_cents,
         tracking_number,
         items_json,
         shipping_json,
@@ -3196,28 +3079,19 @@ app.get("/admin/orders/:id", requireAdmin, (req, res) => {
     `);
 
     const row = stmt.get(id);
-
-    if (!row) {
-      return res.status(404).json({ error: "Order not found." });
-    }
+    if (!row) return res.status(404).json({ error: "Order not found." });
 
     let items = [];
     let shipping = null;
 
     try {
       if (row.items_json) items = JSON.parse(row.items_json);
-    } catch (e) {
-      console.error("Failed to parse items_json for order", id, e);
-    }
-
+    } catch (e) {}
     try {
       if (row.shipping_json) shipping = JSON.parse(row.shipping_json);
-    } catch (e) {
-      console.error("Failed to parse shipping_json for order", id, e);
-    }
+    } catch (e) {}
 
-    const total =
-      row.total_money != null ? Number(row.total_money) / 100 : null;
+    const total = row.total_money != null ? Number(row.total_money) / 100 : null;
 
     res.json({
       id: row.id,
@@ -3226,6 +3100,7 @@ app.get("/admin/orders/:id", requireAdmin, (req, res) => {
       customerName: row.customer_name,
       customerEmail: row.customer_email,
       status: row.status || "PENDING",
+        ...orderPaymentState(row),
       trackingNumber: row.tracking_number || "",
       items,
       shipping,
@@ -3235,27 +3110,23 @@ app.get("/admin/orders/:id", requireAdmin, (req, res) => {
       updatedAt: row.updated_at,
     });
   } catch (err) {
-    console.error("Error fetching order details:", err);
+    logError("Error fetching order details:", err);
     res.status(500).json({ error: "Failed to load order details." });
   }
-});// ===== PACKING SLIP HELPERS (PDF + BARCODE) =====
+});
 
-// Generate a barcode PNG buffer for a given text (SKU) using bwip-js.
-// If bwip-js is not available, we just return null and skip the barcode.
+// ===== PACKING SLIP HELPERS (PDF + BARCODE) =====
 function generateBarcodePng(text) {
   const value = text || "NO-SKU";
-
-  if (!bwipjs) {
-    return Promise.resolve(null);
-  }
+  if (!bwipjs) return Promise.resolve(null);
 
   return new Promise((resolve, reject) => {
     bwipjs.toBuffer(
       {
         bcid: "code128",
         text: value,
-        scale: 3,       // bar thickness
-        height: 10,     // bar height (mm-ish units)
+        scale: 3,
+        height: 10,
         includetext: false,
         textxalign: "center",
       },
@@ -3267,13 +3138,11 @@ function generateBarcodePng(text) {
   });
 }
 
-// Central helper to render the packing slip PDF with SKUs + barcodes
+const packingImages=require('./lib/packing-images');
 async function generatePackingSlipPDF(row, items, shipping, res) {
-  if (!PDFDocument) {
+  if (!PDFDocument)
     throw new Error("PDF generation is not available (PDFDocument is null).");
-  }
 
-  // ---- Format date in Central Time (same as before) ----
   let createdLocalStr = row.created_at || "";
   if (row.created_at) {
     try {
@@ -3286,68 +3155,41 @@ async function generatePackingSlipPDF(row, items, shipping, res) {
         hour: "2-digit",
         minute: "2-digit",
       });
-    } catch (e) {
-      console.error("Failed to format created_at for packing slip", e);
-    }
+    } catch {}
   }
 
   const safeOrderId = String(row.id).replace(/[^a-zA-Z0-9_-]/g, "");
-  res.setHeader(
-    "Content-Disposition",
-    `inline; filename=packing-list-${safeOrderId}.pdf`
-  );
+  res.setHeader("Content-Disposition", `inline; filename=packing-list-${safeOrderId}.pdf`);
   res.setHeader("Content-Type", "application/pdf");
 
   const doc = new PDFDocument({ margin: 40 });
   doc.pipe(res);
 
-  // ---------- HEADER ----------
-  doc
-    .fontSize(18)
-    .text("Sugar Plum Creations", { align: "center" })
-    .moveDown(0.3);
-
+  doc.fontSize(18).text("Brackish Roots", { align: "center" }).moveDown(0.3);
   doc.fontSize(14).text("Packing List", { align: "center" }).moveDown(1);
 
-  // Order summary
-  const total =
-    row.total_money != null ? (Number(row.total_money) / 100).toFixed(2) : "";
+  const total = row.total_money != null ? (Number(row.total_money) / 100).toFixed(2) : "";
   const customerName = row.customer_name || "";
   const customerEmail = row.customer_email || "";
 
   doc.fontSize(10);
   doc.text(`Order #: ${row.id}`);
   doc.text(`Date (Central Time): ${createdLocalStr}`);
-  if (total) {
-    doc.text(`Order Total: $${total}`);
-  }
-  if (row.status) {
-    doc.text(`Status: ${row.status}`);
-  }
+  if (total) doc.text(`Order Total: $${total}`);
+  if (row.status) doc.text(`Status: ${row.status}`);
   doc.moveDown(0.5);
 
-  // ---------- SHIPPING BLOCK ----------
-  const shipName =
-    (shipping && (shipping.name || shipping.customerName)) || customerName;
-  const shipEmail =
-    (shipping && (shipping.email || shipping.customerEmail)) || customerEmail;
+  const shipName = (shipping && (shipping.name || shipping.customerName)) || customerName;
+  const shipEmail = (shipping && (shipping.email || shipping.customerEmail)) || customerEmail;
 
   const addressLines = [];
   if (
     shipping &&
-    (shipping.address1 ||
-      shipping.address2 ||
-      shipping.city ||
-      shipping.state ||
-      shipping.zip)
+    (shipping.address1 || shipping.address2 || shipping.city || shipping.state || shipping.zip)
   ) {
     if (shipping.address1) addressLines.push(shipping.address1);
     if (shipping.address2) addressLines.push(shipping.address2);
-    const cityStateZip = [
-      shipping.city || "",
-      shipping.state || "",
-      shipping.zip || "",
-    ]
+    const cityStateZip = [shipping.city || "", shipping.state || "", shipping.zip || ""]
       .filter(Boolean)
       .join(" ");
     if (cityStateZip) addressLines.push(cityStateZip);
@@ -3359,220 +3201,120 @@ async function generatePackingSlipPDF(row, items, shipping, res) {
   addressLines.forEach((line) => doc.text(line));
   doc.moveDown(0.5);
 
-  // ---------- ITEMS HEADER ----------
-  doc
-    .fontSize(11)
-    .text("Items", { underline: true })
-    .moveDown(0.3);
+  doc.fontSize(11).text("Items", { underline: true }).moveDown(0.3);
 
-  const startX = 40;
-  const headerY = doc.y;
-
-  doc.fontSize(10);
-  doc.text("Qty", startX, headerY);
-  doc.text("Item", startX + 40, headerY);
-  doc.text("Variant", startX + 220, headerY);
-  doc.text("SKU", startX + 360, headerY);
-
-  doc.moveTo(startX, headerY + 12).lineTo(550, headerY + 12).stroke();
-
-  let y = headerY + 18;
-
-  // ---------- ITEMS + SKU BARCODES ----------
-  for (const item of items || []) {
-    const name = item.name || "Item";
-    const color = item.color || "";
-    const size = item.size || "";
-    const qty = item.quantity || item.qty || 1;
-    const sku = item.sku || item.SKU || "";
-
-    const variantParts = [color, size].filter(Boolean);
-    const variantText = variantParts.join(" / ");
-
-    // Simple page break
-    if (y > doc.page.height - 120) {
-      doc.addPage();
-      y = doc.page.margins ? doc.page.margins.top : 40;
-    }
-
-    doc.fontSize(10);
-    doc.text(String(qty), startX, y, { width: 30 });
-    doc.text(name, startX + 40, y, { width: 170 });
-    doc.text(variantText, startX + 220, y, { width: 120 });
-    doc.text(sku || "—", startX + 360, y, { width: 160 });
-
-    y += 16;
-
-    // Barcode directly under SKU if we have one + bwip-js
-    if (sku && bwipjs) {
-      try {
-        const barcodePng = await generateBarcodePng(sku);
-
-        if (barcodePng) {
-          const barcodeWidth = 160;
-          const barcodeHeight = 40;
-
-          doc.image(barcodePng, startX + 360, y, {
-            fit: [barcodeWidth, barcodeHeight],
-            align: "left",
-          });
-
-          y += barcodeHeight + 8;
-        }
-      } catch (err) {
-        console.error("Error generating barcode for SKU", sku, err);
-        doc
-          .fontSize(8)
-          .fillColor("red")
-          .text("(Barcode error)", startX + 360, y, { width: 160 });
-        doc.fillColor("black");
-        y += 14;
-      }
-    } else {
-      y += 4;
-    }
-
-    // Row divider
-    doc
-      .moveTo(startX, y)
-      .lineTo(550, y)
-      .strokeColor("#cccccc")
-      .stroke()
-      .strokeColor("black");
-
-    y += 8;
+  const startX=40;
+  const imageLoader=packingImages.loader({publicDir:path.join(__dirname,'public'),patchDir:PATCHES_UPLOAD_DIR,designDir:path.join(db.dataDir,'apparel-artwork')});
+  const header=()=>{const top=doc.y;doc.fontSize(9).fillColor('#23453d');doc.text('Photo',40,top,{width:78});doc.text('Qty',130,top,{width:28});doc.text('Item / selected options',165,top,{width:245});doc.text('SKU',430,top,{width:120});doc.moveTo(40,top+16).lineTo(572,top+16).strokeColor('#b8c7be').stroke();doc.fillColor('black');return top+24;};
+  let y=header();
+  for(const [itemIndex,item] of (items||[]).entries()){
+    const qty=item.quantity||item.qty||1,sku=item.sku||item.SKU||'',custom=item.customHat;
+    const approvedProof=item.customApparel?.requiresProof?db.prepare("SELECT files_json,status FROM paid_proofs WHERE order_id=? AND item_index=?").get(row.id,itemIndex):null;
+    const apparelText=item.customApparel?.selections.map(s=>s.side+': '+s.designName+(s.personalization?' — '+s.personalization:'')).join('\n');
+    const detail=[item.customApparel?.requiresProof&&approvedProof?.status!=='APPROVED'?'Personalized proof awaiting approval':null,apparelText,item.color,item.size,item.printSide,custom?`Patch: ${custom.patchName} / ${custom.patchVariantName||'Default'}${custom.patchMaterial?' / '+custom.patchMaterial:''}`:null,custom?`Placement: wearer's ${custom.placement}`:null,item.colors?.join(', '),item.sizes?.join(', ')].filter(Boolean).join('\n');
+    const note=(custom||item.customApparel)&&item.customerNote?'Customer note: '+item.customerNote:'';
+    doc.font('Helvetica-Bold').fontSize(10);const nameHeight=doc.heightOfString(item.name||'Item',{width:245});doc.font('Helvetica').fontSize(9);const detailHeight=detail?doc.heightOfString(detail,{width:245})+6:0,noteHeight=note?doc.heightOfString(note,{width:245})+10:0;
+    const rowHeight=Math.max(item.customApparel?.location==='Front & Back'?182:item.customHat?112:92,nameHeight+detailHeight+noteHeight+18);
+    if(y+rowHeight>doc.page.height-65){doc.addPage();doc.fontSize(10).text(`Order #${row.id} - continued`,40,40,{width:500});doc.moveDown(.7);y=header();}
+    const product=(cachedBaseProducts||cachedCatalog||[]).find(p=>p.id===item.id),variation=(product?.variations||product?.squareVariations||[]).find(v=>v.id===(item.catalogObjectId||item.squareVariationId));
+    const patch=custom&&patchesConfig.patches.find(p=>p.id===custom.patchId),p=packingImages.preview(item,patch,variation,product);
+    let photo;try{photo=item.customApparel?await packingImages.apparelThumbnail(item,imageLoader,item.customApparel.selections[0].side):await packingImages.thumbnail(item,p,imageLoader);}catch{}
+    if(approvedProof?.status==='APPROVED'){try{const file=JSON.parse(approvedProof.files_json)[0];if(file)photo=await require('sharp')(path.join(db.dataDir,'paid-proofs',file.filename)).rotate().png().toBuffer();}catch{}}
+    if(photo)photo=await photoWatermarks.stamp(photo);
+    if(photo)doc.image(photo,40,y,{fit:[78,78],align:'center',valign:'center'});
+    else{doc.rect(40,y,78,78).strokeColor('#dce3df').stroke();doc.fillColor('#66746e').fontSize(8).text('Photo unavailable',45,y+32,{width:68,align:'center'}).fillColor('black');}
+    if(item.customApparel?.location==='Front & Back'){try{const back=await packingImages.apparelThumbnail(item,imageLoader,'Back');if(back)doc.image(await photoWatermarks.stamp(back),40,y+88,{fit:[78,78]});doc.fontSize(7).text('Front / Back',40,y+170,{width:78,align:'center'});}catch{}}
+    if(custom&&p.patchAvailable===false)doc.fillColor('#66746e').fontSize(7).text('Patch photo unavailable',40,y+80,{width:78,align:'center'}).fillColor('black');
+    doc.font('Helvetica-Bold').fontSize(10).text(String(qty),130,y,{width:28}).text(item.name||'Item',165,y,{width:245});
+    doc.font('Helvetica').fontSize(9);if(detail)doc.text(detail,165,y+nameHeight+6,{width:245});if(note)doc.text(note,165,y+nameHeight+detailHeight+10,{width:245});
+    doc.fontSize(9).text(sku||'-',430,y,{width:120});
+    if(sku&&bwipjs){try{const barcode=await generateBarcodePng(sku);if(barcode)doc.image(barcode,430,y+22,{fit:[120,35]});}catch{}}
+    y+=rowHeight;doc.moveTo(startX,y).lineTo(572,y).strokeColor('#dce3df').stroke().strokeColor('black');y+=12;doc.x=40;doc.y=y;
   }
 
-  // ---------- FOOTER (auto-spacing, centered) ----------
   const page = doc.page;
-  const margins = page.margins || {
-    top: 40,
-    bottom: 40,
-    left: 40,
-    right: 40,
-  };
+  const margins = page.margins || { top: 40, bottom: 40, left: 40, right: 40 };
 
-  const footerGap = 30; // minimum blank space after last row
-  const minFooterBlockHeight = 40; // how tall the footer text block roughly is
+  const footerGap = 30;
+  const minFooterBlockHeight = 40;
 
-  // Start footer a bit below the last used Y
   let footerStartY = Math.max(y, doc.y) + footerGap;
-
-  // If that would cram it against the bottom, move footer to a new page
   const maxFooterTop = page.height - margins.bottom - minFooterBlockHeight;
   if (footerStartY > maxFooterTop) {
     doc.addPage();
-    const newPage = doc.page;
-    const newMargins = newPage.margins || margins;
-    footerStartY = newMargins.top; // start near top of new page
+    footerStartY = (doc.page.margins || margins).top;
   }
 
   const marginX = margins.left || 40;
-  const availableWidth =
-    page.width - (marginX + (margins.right || 40));
+  const availableWidth = page.width - (marginX + (margins.right || 40));
 
-  doc
-    .fontSize(9)
-    .text(
-      "This packing list is for internal use only. Prices are intentionally omitted.",
-      marginX,
-      footerStartY,
-      {
-        align: "center",
-        width: availableWidth,
-      }
-    )
-    .moveDown(0.75);
-
-  doc.text(
-    "Thank you for supporting our small business!",
+  doc.fontSize(9).text(
+    "Internal packing sheet - check quantities and design details before dispatch.",
     marginX,
-    doc.y,
-    {
-      align: "center",
-      width: availableWidth,
-    }
+    footerStartY,
+    { align: "center", width: availableWidth }
   );
+  doc.moveDown(0.75);
+  doc.text("Thank you for supporting our small business!", marginX, doc.y, {
+    align: "center",
+    width: availableWidth,
+  });
 
   doc.end();
 }
 
+// Packing slip endpoint
+app.get("/admin/orders/:id/packing-slip", requireAdmin, async (req, res) => {
+  try {
+    if (!PDFDocument)
+      return res
+        .status(500)
+        .send("PDF generation is not available (pdfkit not installed).");
 
-// ===== PACKING LIST PDF (Admin-only) =====
-app.get(
-  "/admin/orders/:id/packing-slip",
-  requireAdmin,
-  async (req, res) => {
+    const id = resolveOrderId(req.params.id);
+    if (!id) return res.status(400).send("Invalid order id.");
+
+    const stmt = db.prepare(`
+      SELECT
+        id,
+        customer_name,
+        customer_email,
+        status,
+        tracking_number,
+        items_json,
+        shipping_json,
+        total_money,
+        currency,
+        created_at
+      FROM orders
+      WHERE id = ?
+    `);
+
+    const row = stmt.get(id);
+    if (!row) return res.status(404).send("Order not found.");
+
+    let items = [];
+    let shipping = null;
+
     try {
-      if (!PDFDocument) {
-        return res
-          .status(500)
-          .send("PDF generation is not available (pdfkit not installed).");
-      }
+      if (row.items_json) items = JSON.parse(row.items_json);
+    } catch {}
+    try {
+      if (row.shipping_json) shipping = JSON.parse(row.shipping_json);
+    } catch {}
 
-      const id = resolveOrderId(req.params.id);
-      if (!id) {
-        return res.status(400).send("Invalid order id.");
-      }
-
-      const stmt = db.prepare(`
-        SELECT
-          id,
-          customer_name,
-          customer_email,
-          status,
-          tracking_number,
-          items_json,
-          shipping_json,
-          total_money,
-          currency,
-          created_at
-        FROM orders
-        WHERE id = ?
-      `);
-
-      const row = stmt.get(id);
-      if (!row) {
-        return res.status(404).send("Order not found.");
-      }
-
-      let items = [];
-      let shipping = null;
-
-      try {
-        if (row.items_json) items = JSON.parse(row.items_json);
-      } catch (e) {
-        console.error("Failed to parse items_json for packing list", id, e);
-      }
-
-      try {
-        if (row.shipping_json) shipping = JSON.parse(row.shipping_json);
-      } catch (e) {
-        console.error(
-          "Failed to parse shipping_json for packing list",
-          id,
-          e
-        );
-      }
-
-      await generatePackingSlipPDF(row, items, shipping, res);
-    } catch (err) {
-      console.error("Error generating packing list PDF:", err);
-      if (!res.headersSent) {
-        res.status(500).send("Failed to generate packing list.");
-      }
-    }
+    await generatePackingSlipPDF(row, items, shipping, res);
+  } catch (err) {
+    logError("Error generating packing list PDF:", err);
+    if (!res.headersSent) res.status(500).send("Failed to generate packing list.");
   }
-);
+});
 
-
-// Update order status + tracking, and fire status-based emails
+// Update order status + tracking (and send emails on PAID/SHIPPED transitions)
 app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
   try {
     const id = resolveOrderId(req.params.id);
-    if (!id) {
-      return res.status(400).json({ error: "Invalid order id." });
-    }
+    if (!id) return res.status(400).json({ error: "Invalid order id." });
 
     const { status, trackingNumber } = req.body || {};
 
@@ -3582,6 +3324,8 @@ app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
         customer_name,
         customer_email,
         status AS old_status,
+        payment_status,
+        refunded_cents,
         tracking_number AS old_tracking,
         total_money,
         currency,
@@ -3592,17 +3336,20 @@ app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
     `);
 
     const row = select.get(id);
-    if (!row) {
-      return res.status(404).json({ error: "Order not found." });
-    }
+    if (!row) return res.status(404).json({ error: "Order not found." });
 
     const now = new Date().toISOString();
 
-    const newStatus = typeof status === "string" ? status : row.old_status;
+    const newStatus = typeof status === "string" ? status.toUpperCase() : row.old_status;
+    if(!["PENDING","PAID","AWAITING_PROOF","IN_PRODUCTION","READY","SHIPPED","ARCHIVED","CANCELLED","REFUNDED"].includes(newStatus))return res.status(400).json({error:"Choose a valid order status"});
+    if(['PAID','REFUNDED'].includes(newStatus) && newStatus!==row.old_status)
+      return res.status(409).json({error:'Payment and refunds are confirmed by Square. Choose a fulfillment status instead.'});
+    const payment=orderPaymentState(row);
+    if(['IN_PRODUCTION','READY','SHIPPED'].includes(newStatus) && !['PAID','PARTIALLY_REFUNDED'].includes(payment.paymentStatus))
+      return res.status(409).json({error:'A verified, non-fully-refunded Square payment is required before production or shipping.'});
+    if(["PAID","IN_PRODUCTION","READY","SHIPPED"].includes(newStatus)&&!business.paidProofs.canProduce(Number(id)))return res.status(409).json({error:"Approve every personalized item proof before production or shipping."});
     const newTracking =
-      typeof trackingNumber === "string"
-        ? trackingNumber.trim()
-        : row.old_tracking || "";
+      typeof trackingNumber === "string" ? trackingNumber.trim() : row.old_tracking || "";
 
     const update = db.prepare(`
       UPDATE orders
@@ -3612,25 +3359,7 @@ app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
 
     update.run(newStatus, newTracking, now, id);
 
-    // Build an order object shaped for our email helpers
-    const orderForEmail = {
-      id: row.id,
-      customer_name: row.customer_name,
-      customer_email: row.customer_email,
-      status: newStatus,
-      total_amount: row.total_money, // cents
-      items_json: row.items_json,
-      tracking_number: newTracking,
-    };
-
-    try {
-      // This will:
-      // - send customer confirmation + internal alert when status becomes PAID
-      // - send customer shipping email when status becomes SHIPPED
-      await handleOrderStatusEmails(orderForEmail, row.old_status, newStatus);
-    } catch (e) {
-      console.error("Error sending status emails:", e);
-    }
+    if(newStatus!==row.old_status||newTracking!==row.old_tracking)business.notifyStatus(row,newStatus,newTracking);
 
     return res.json({
       ok: true,
@@ -3640,21 +3369,21 @@ app.put("/admin/orders/:id", requireAdmin, async (req, res) => {
       updatedAt: now,
     });
   } catch (err) {
-    console.error("Error updating order:", err);
+    logError("Error updating order:", err);
     res.status(500).json({ error: "Failed to update order." });
   }
 });
 
-// ===== BACKGROUND AUTO-REFRESH LOOPS =====
+app.use((err,req,res,next)=>{if(res.headersSent)return next(err);res.status(err.status||400).json({error:err.code==='LIMIT_FILE_SIZE'?'Each uploaded file must be under 10 MB':err.code==='LIMIT_FILE_COUNT'?'Upload at most five files':err.status?err.message:'The request could not be processed'});});
 
-// Log that we are setting up background loops (helpful on Render)
+// ===== BACKGROUND AUTO-REFRESH LOOPS =====
+if (require.main === module) {
 console.log("Setting up background auto-refresh loops...", {
   NODE_ENV: process.env.NODE_ENV,
   INVENTORY_TTL_MS,
   CATALOG_TTL_MS,
 });
 
-// Run an initial soft warmup after server start (doesn't crash if Square fails)
 (async () => {
   try {
     console.log("Initial warmup: ensuring catalog + inventory...");
@@ -3667,30 +3396,22 @@ console.log("Setting up background auto-refresh loops...", {
       lastInventoryFetch
     );
   } catch (err) {
-    console.error(
-      "Initial warmup failed (will retry later via requests):",
-      err
-    );
+    logError("Initial warmup failed (will retry later via requests):", err);
   }
 })();
 
-// Every 5 minutes: refresh inventory snapshot so counts stay fresh
 setInterval(async () => {
   try {
     console.log(
       `[${new Date().toISOString()}] Background inventory refresh (5 min interval)...`
     );
     await refreshInventoryForCatalog();
-    console.log(
-      "Background inventory refresh complete. lastInventoryFetch =",
-      lastInventoryFetch
-    );
+    console.log("Background inventory refresh complete. lastInventoryFetch =", lastInventoryFetch);
   } catch (err) {
-    console.error("Background inventory refresh failed:", err);
+    logError("Background inventory refresh failed:", err);
   }
-}, INVENTORY_TTL_MS); // INVENTORY_TTL_MS is already 5 minutes
+}, INVENTORY_TTL_MS);
 
-// Every 24 hours: refresh full catalog + inventory
 setInterval(async () => {
   try {
     console.log(
@@ -3705,11 +3426,13 @@ setInterval(async () => {
       lastInventoryFetch
     );
   } catch (err) {
-    console.error("Background catalog refresh failed:", err);
+    logError("Background catalog refresh failed:", err);
   }
-}, CATALOG_TTL_MS); // CATALOG_TTL_MS is already 24 hours
+}, CATALOG_TTL_MS);
 
 // Start server
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
+}
+module.exports = { app, db, business };

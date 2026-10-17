@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thank You – Brackish Roots</title>
+
+    <!-- Google Fonts -->
+    <link rel="stylesheet" href="brackish-theme.css"><link rel="icon" href="assets/brackish-roots-logo.png"><meta name="theme-color" content="#233E39"></head>
+
+  <body data-brand="brackish-roots">
+    <a class="br-skip" href="#main">Skip to content</a><div class="br-topbar"><div class="br-wrap"><span>Gulf Coast • Mississippi</span><span class="br-topbar-note">Coastal apparel &amp; custom creations</span></div></div><header class="br-header"><div class="br-wrap br-header-inner"><a href="index.html" class="br-brand" aria-label="Brackish Roots home"><img class="br-logo" src="assets/brackish-roots-logo.png" alt="Brackish Roots — Gulf Coast, MS" width="206" height="206"></a><button class="br-menu-toggle" type="button" aria-expanded="false" aria-controls="br-navigation">Menu</button><nav id="br-navigation" class="br-nav" aria-label="Main navigation"><a href="index.html">Home</a><a href="apparel.html">Apparel</a><a href="hats.html?mode=shop">Hats</a><a href="prints.html">3D Prints</a><a href="patches.html">Patches</a><a href="custom-orders.html">Custom Orders</a></nav><a href="cart.html" class="br-cart" aria-label="View shopping cart"><svg viewbox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 4h4l4 18h17l3-13H8"></path><circle cx="12" cy="28" r="2"></circle><circle cx="25" cy="28" r="2"></circle></svg><span class="br-cart-label">Cart</span><span class="br-count" data-br-cart-count>0</span></a></div></header><main class="br-confirmation-card" id="main">
+      <img src="assets/brackish-roots-logo.png" class="logo" alt="Brackish Roots">
+
+      <h1 class="title">Thank You!</h1>
+      <div class="subtitle" id="order-subtitle">Checking your order</div>
+
+      <div class="message">Your payment status will appear below. If you completed checkout, check your email for order details. If you do not see our email, check your Junk or Spam folder and mark it as not spam. Thank you for supporting our small business.</div>
+
+      <div id="statusBox" class="status">Confirming your payment…</div>
+
+      <a href="index.html" class="button">Continue Shopping</a>
+    </main>
+
+    <script src="config.js"></script><script>
+      // ---------- UI helper ----------
+      function setStatus(msg) {
+        const el = document.getElementById("statusBox");
+        if (el) el.textContent = msg;
+        const subtitle = document.getElementById("order-subtitle");
+        if (subtitle) subtitle.textContent = msg.startsWith("Payment confirmed") ? "Your order has been received" : "Payment confirmation";
+      }
+
+      // ---------- Cart clear (only after confirmed) ----------
+      function clearSpcCartOnce() {
+        const FLAG = "spc_cart_cleared_on_thankyou";
+        if (sessionStorage.getItem(FLAG) === "1") return;
+
+        const CART_KEY = "spc_cart_v1";
+
+        try {
+          localStorage.removeItem(CART_KEY);
+        } catch {}
+        try {
+          sessionStorage.removeItem(CART_KEY);
+        } catch {}
+
+        // Optional legacy cleanup (safe)
+        const legacyKeys = ["spc_cart", "spcCart", "cart", "cartItems", "cartCount"];
+        legacyKeys.forEach((k) => {
+          try {
+            localStorage.removeItem(k);
+          } catch {}
+          try {
+            sessionStorage.removeItem(k);
+          } catch {}
+        });
+
+        // If a global cart array exists (some pages do), zero it out too
+        try {
+          if (window.cart && Array.isArray(window.cart)) {
+            window.cart.length = 0;
+          }
+        } catch {}
+
+        sessionStorage.setItem(FLAG, "1");
+        window.dispatchEvent(new CustomEvent("br-cart-updated"));
+        console.log("✅ Thank-you page: cart cleared");
+      }
+
+      // ---------- Confirm checkout (creates REAL order + emails) ----------
+      let confirmInFlight = false, confirmAttempts = 0;
+      async function confirmCheckout() {
+        if (confirmInFlight) return;
+        const queryPending = new URLSearchParams(location.search).get("checkout");
+        const already = !queryPending && sessionStorage.getItem("spc_checkout_confirmed") === "1";
+        if (already) {
+          setStatus("Payment confirmed ✅");
+          return;
+        }
+
+        const pendingId = new URLSearchParams(location.search).get("checkout") || sessionStorage.getItem("spc_pending_checkout_id");
+
+        if (!pendingId) {
+          // This usually means someone came here directly, or the browser cleared session storage.
+          setStatus(
+            "We could not find a checkout to confirm in this browser. If you recently paid, check your email, including Junk or Spam, for your receipt. Contact Brackish Roots if you need help; please do not pay again."
+          );
+          return;
+        }
+
+        confirmInFlight = true;
+        confirmAttempts++;
+        try {
+          setStatus("Confirming your payment…");
+
+          const res = await fetch(`${API_BASE}/checkout/confirm`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pendingId }),
+          });
+
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok) {
+            // Square sometimes lags — this endpoint returns 409 if it can't verify yet.
+            if (res.status === 409) {
+              if (confirmAttempts < 8) {
+                setStatus("Payment is processing… checking again shortly.");
+                setTimeout(confirmCheckout, Math.min(1500 * confirmAttempts, 10000));
+              } else {
+                setStatus("We could not confirm your payment yet. Check your Square receipt and email, including Junk or Spam. Refresh this page to check again, or contact Brackish Roots for help. Please do not pay again while we verify it.");
+              }
+              return;
+            }
+
+            console.error("Confirm failed:", data);
+            setStatus(
+              "We could not confirm your payment yet. Check your Square receipt and email, including Junk or Spam, or contact Brackish Roots for help. Please do not pay again while we verify it."
+            );
+            return;
+          }
+
+          // ✅ Success: now clear cart + refresh inventory
+          sessionStorage.setItem("spc_checkout_confirmed", "1");
+          clearSpcCartOnce();
+
+
+          // Optional: remove pending id so it can’t be reused
+          try {
+            sessionStorage.removeItem("spc_pending_checkout_id");
+          } catch {}
+
+          setStatus("Payment confirmed ✅");
+        } catch (err) {
+          console.error("Error confirming checkout:", err);
+          setStatus("Payment verification is taking longer than usual. Check your connection and refresh this page, or contact Brackish Roots with your Square receipt. Please do not pay again while we verify it.");
+        } finally {
+          confirmInFlight = false;
+        }
+      }
+
+      // Run on normal load
+      document.addEventListener("DOMContentLoaded", () => {
+        confirmCheckout();
+      });
+
+      // If browser restores page from back/forward cache (common on mobile)
+      window.addEventListener("pageshow", () => {
+        // don't clear cart here anymore; only after confirm
+        confirmCheckout();
+      });
+    </script>
+  <footer class="br-footer"><div class="br-wrap"><div class="br-footer-grid"><a href="index.html" aria-label="Brackish Roots home"><img src="assets/brackish-roots-logo.png" alt="Brackish Roots" class="br-footer-logo" width="115" height="115" loading="lazy"></a><div><h2>Shop</h2><a href="apparel.html">Apparel</a><a href="hats.html?mode=shop">Hats</a><a href="prints.html">3D Prints</a><a href="patches.html">Standalone Patches</a><a href="hats.html?mode=build">Build Your Hat</a></div><div><h2>Explore</h2><a href="index.html#our-story">Our Story</a><a href="index.html#coastal-life">Gulf Coast Lifestyle</a><a href="cart.html">Your Cart</a><a href="https://www.facebook.com/profile.php?id=61554519952229" target="_blank" rel="noopener">Facebook</a></div><div><h2>Make It Yours</h2><p>Your favorite hat. Your own patch.<br>A little piece of the coast, made for you.</p><a class="br-button br-button-orange" href="hats.html?mode=build">Build your hat <span aria-hidden="true">→</span></a></div></div><div class="br-footer-bottom"><span>© 2026 Brackish Roots • Gulf Coast, Mississippi</span><span>Rooted in the Coast. Made for the Outdoors.</span></div></div></footer><script src="brackish-ui.js"></script><script src="brackish-analytics.js"></script><script src="photo-watermarks.js"></script></body>
+</html>

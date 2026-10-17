@@ -1,0 +1,17 @@
+/* Square-configured colors only. Native text controls remain usable in older browsers. */
+.square-option-swatch{display:none}
+@supports (appearance:base-select){
+ select.square-color-select,select.square-color-select::picker(select){appearance:base-select}
+ select.square-color-select{background-image:none!important;display:flex;align-items:center;gap:10px;min-width:0;text-align:left}
+ select.square-color-select::picker(select){background:#fffdf6;color:#233e39;border:1px solid #b9ad91;border-radius:4px;box-shadow:0 8px 24px #233e3926;max-height:min(350px,65dvh);overflow:auto;min-width:anchor-size(width)}
+ select.square-color-select>.square-selected-button{all:unset;display:contents}
+ select.square-color-select selectedcontent,select.square-color-select option{display:flex;align-items:center;gap:10px;font:inherit;text-transform:none;letter-spacing:normal}
+ select.square-color-select selectedcontent{min-width:0;flex:1}
+ select.square-color-select option{padding:11px 14px;white-space:normal;min-height:44px}
+ select.square-color-select option:checked{background:#f3e8cd;font-weight:600}
+ select.square-color-select option:hover,select.square-color-select option:focus{background:#e8efe9;color:#233e39}
+ select.square-color-select option:disabled{opacity:.5}
+ select.square-color-select option::checkmark{order:3;margin-left:auto}
+ select.square-color-select::picker-icon{color:#233e39}
+ select.square-color-select .square-option-swatch{display:inline-block;width:19px;height:19px;flex:0 0 19px;border-radius:50%;border:1px solid #233e3980;box-shadow:inset 0 0 0 2px #ffffff70}
+}

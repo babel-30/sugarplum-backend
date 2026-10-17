@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Your Cart – Brackish Roots</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="brackish-theme.css"><link rel="icon" href="assets/brackish-roots-logo.png"><meta name="theme-color" content="#233E39"><link rel="stylesheet" href="cart.css"><link rel="stylesheet" href="apparel-builder.css"><script defer src="variation-options.js"></script>
+</head>
+
+  <body data-clarity-mask="true" data-brand="brackish-roots" class="br-cart-page">
+    <a class="br-skip" href="#main">Skip to content</a><div class="br-topbar"><div class="br-wrap"><span>Gulf Coast • Mississippi</span><span class="br-topbar-note">Coastal apparel &amp; custom creations</span></div></div><header class="br-header"><div class="br-wrap br-header-inner"><a href="index.html" class="br-brand" aria-label="Brackish Roots home"><img class="br-logo" src="assets/brackish-roots-logo.png" alt="Brackish Roots — Gulf Coast, MS" width="206" height="206"></a><button class="br-menu-toggle" type="button" aria-expanded="false" aria-controls="br-navigation">Menu</button><nav id="br-navigation" class="br-nav" aria-label="Main navigation"><a href="index.html">Home</a><a href="apparel.html">Apparel</a><a href="hats.html?mode=shop">Hats</a><a href="prints.html">3D Prints</a><a href="patches.html">Patches</a><a href="custom-orders.html">Custom Orders</a></nav><a href="cart.html" class="br-cart" aria-label="View shopping cart"><svg viewbox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 4h4l4 18h17l3-13H8"></path><circle cx="12" cy="28" r="2"></circle><circle cx="25" cy="28" r="2"></circle></svg><span class="br-cart-label">Cart</span><span class="br-count" data-br-cart-count>0</span></a></div></header><!-- Shared header -->
+    <!-- Global Brackish Roots alert modal -->
+    <div id="spc-alert-overlay" class="spc-alert-overlay">
+      <div class="spc-alert spc-alert-info">
+        <h3 class="spc-alert-title">Heads up!</h3>
+        <p class="spc-alert-message"></p>
+        <button class="spc-alert-button" type="button">OK</button>
+      </div>
+    </div>
+
+    <main class="cart-page" id="main">
+      <div class="cart-intro"><div><p class="cart-eyebrow">Made for the outdoors</p><h1>Your Cart</h1><p>Review your selections and make them yours.</p></div><a class="cart-shop-link" href="hats.html?mode=shop">Continue shopping →</a></div><section class="cart-layout">
+        <!-- LEFT COLUMN: cart items -->
+        <div class="cart-left-column"><div id="cart-details" class="cart-items">
+          <!-- JS injects cart lines here -->
+        </div>
+
+        <section class="cart-checkout-details" aria-label="Checkout details"><div class="cart-customer-section">
+              <h2>Contact details</h2>
+
+              <label class="cart-field">
+                <span>First name <span class="required">*</span></span>
+                <input type="text" id="checkout-first-name" name="given-name" placeholder="First name" autocomplete="given-name" maxlength="120" required>
+              </label>
+
+              <label class="cart-field">
+                <span>Last name</span>
+                <input type="text" id="checkout-last-name" name="family-name" placeholder="Last name" autocomplete="family-name" maxlength="120">
+              </label>
+
+              <label class="cart-field">
+                <span>Email <span class="required">*</span></span>
+                <input type="email" id="checkout-email" placeholder="you@example.com" autocomplete="email">
+              </label>
+
+              <label class="cart-field">
+                <span>Phone</span>
+                <input type="tel" id="checkout-phone" placeholder="(optional)" autocomplete="tel">
+              </label>
+            </div>
+
+            <label class="cart-field" id="pickup-option" hidden><span><input id="checkout-pickup" type="checkbox"> Local pickup</span></label><div class="cart-shipping-section">
+              <h2>Delivery details</h2>
+
+              <label class="cart-field">
+                <span>Address Line 1</span>
+                <input type="text" id="checkout-address1" placeholder="Street address" autocomplete="address-line1">
+              </label>
+
+              <label class="cart-field">
+                <span>Address Line 2</span>
+                <input type="text" id="checkout-address2" placeholder="Apt, suite, etc. (optional)" autocomplete="address-line2">
+              </label>
+
+              <label class="cart-field">
+                <span>City</span>
+                <input type="text" id="checkout-city" placeholder="City" autocomplete="address-level2">
+              </label>
+
+              <div class="cart-field-row">
+                <label class="cart-field cart-field-half">
+                  <span>State</span>
+                  <input type="text" id="checkout-state" placeholder="State" autocomplete="address-level1">
+                </label>
+
+                <label class="cart-field cart-field-half">
+                  <span>ZIP</span>
+                  <input type="text" id="checkout-zip" placeholder="ZIP" autocomplete="postal-code">
+                </label>
+              </div>
+            </div>
+
+            </section></div><!-- RIGHT COLUMN: summary + customer info + actions -->
+        <aside class="cart-summary-panel">
+          <div id="cart-summary">
+            <!-- Free shipping banner (kept the same; JS fills it) -->
+            <div id="free-shipping-banner" class="free-shipping-banner">
+              <!-- JS will fill this -->
+            </div>
+
+            <!-- ORDER SUMMARY BREAKDOWN -->
+            <section class="cart-summary-card">
+              <div class="cart-summary-header">
+                <h2>Order Summary</h2>
+              </div>
+
+              <div class="cart-summary-body">
+                <div class="cart-summary-row">
+                  <span class="cart-summary-label">Total items:</span>
+                  <span class="cart-summary-value" id="summary-total-items">0</span>
+                </div>
+
+                <div class="cart-summary-row">
+                  <span class="cart-summary-label">Subtotal:</span>
+                  <span class="cart-summary-value" id="summary-subtotal">$0.00</span>
+                </div>
+
+                <div class="cart-summary-row">
+                  <span class="cart-summary-label">Shipping:</span>
+                  <span class="cart-summary-value" id="summary-shipping">$0.00</span>
+                </div>
+
+                <div class="cart-summary-row">
+                  <span class="cart-summary-label">Convenience Fee (3%):</span>
+                  <span class="cart-summary-value" id="summary-convenience-fee">$0.00</span>
+                </div>
+
+                <div class="cart-summary-row">
+                  <span class="cart-summary-label">Estimated Sales Tax:</span>
+                  <span class="cart-summary-value" id="summary-sales-tax">$0.00</span>
+                </div>
+
+                <hr class="cart-summary-divider">
+
+                <div class="cart-summary-row cart-summary-grand">
+                  <span class="cart-summary-total-label">Order Total:</span>
+                  <span class="cart-summary-total-value" id="summary-order-total">$0.00</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- Customer details -->
+            <!-- Shipping section -->
+            <!-- ACTION BUTTONS -->
+            <div class="cart-actions">
+              <a href="hats.html?mode=shop" class="continue-shopping">
+                Continue Shopping
+              </a>
+
+              <button id="checkout-btn" type="button">Continue to checkout</button>
+            <p class="cart-checkout-help">Final availability and totals are confirmed at checkout.</p></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <!-- ORDER MATTERS (config.js MUST load first) -->
+    <div id="image-modal" class="image-modal hidden"><div class="image-modal-backdrop"></div><div class="image-modal-dialog" role="dialog" aria-modal="true" aria-label="Product image viewer"><button type="button" class="image-modal-close" aria-label="Close image viewer">×</button><div class="image-modal-main"><img class="image-modal-img" id="image-modal-img" src="" alt=""></div><div class="image-modal-gallery"></div><div class="image-modal-caption" id="image-modal-caption"></div></div></div><script src="stock-alerts.js"></script><script src="config.js"></script>
+    <script src="hats.js"></script><script src="cart-preview.js"></script><script src="apparel-placement.js"></script><script src="apparel-builder.js"></script><script src="script.js"></script>
+  <footer class="br-footer"><div class="br-wrap"><div class="br-footer-grid"><a href="index.html" aria-label="Brackish Roots home"><img src="assets/brackish-roots-logo.png" alt="Brackish Roots" class="br-footer-logo" width="115" height="115" loading="lazy"></a><div><h2>Shop</h2><a href="apparel.html">Apparel</a><a href="hats.html?mode=shop">Hats</a><a href="prints.html">3D Prints</a><a href="patches.html">Standalone Patches</a><a href="hats.html?mode=build">Build Your Hat</a></div><div><h2>Explore</h2><a href="index.html#our-story">Our Story</a><a href="index.html#coastal-life">Gulf Coast Lifestyle</a><a href="cart.html">Your Cart</a><a href="https://www.facebook.com/profile.php?id=61554519952229" target="_blank" rel="noopener">Facebook</a></div><div><h2>Make It Yours</h2><p>Your favorite hat. Your own patch.<br>A little piece of the coast, made for you.</p><a class="br-button br-button-orange" href="hats.html?mode=build">Build your hat <span aria-hidden="true">→</span></a></div></div><div class="br-footer-bottom"><span>© 2026 Brackish Roots • Gulf Coast, Mississippi</span><span>Rooted in the Coast. Made for the Outdoors.</span></div></div></footer><script src="brackish-ui.js"></script><script src="brackish-analytics.js"></script><script src="photo-watermarks.js"></script></body>
+</html>

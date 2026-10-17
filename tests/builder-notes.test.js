@@ -1,0 +1,2 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),{builderNote}=require('../lib/builder-notes');
+test('builder notes accept optional text up to 250 characters',()=>{assert.equal(builderNote(null),'');assert.equal(builderNote('a'.repeat(250)).length,250);assert.throws(()=>builderNote('a'.repeat(251)),{status:400});assert.throws(()=>builderNote({text:'bad'}),{status:400});assert.equal(builderNote('  Front\nHigher\u0000 please  '),'Front\nHigher please');});

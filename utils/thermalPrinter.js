@@ -1,41 +1,5 @@
-const { SerialPort } = require("serialport");
-
-const COM_PORT = "COM3";
-const BAUD_RATE = 115200;
-
-function sendToPrinter(rawCommands) {
-  return new Promise((resolve, reject) => {
-    const port = new SerialPort(
-      {
-        path: COM_PORT,
-        baudRate: BAUD_RATE,
-      },
-      (err) => {
-        if (err) {
-          console.error("Error opening COM port:", err);
-          return reject(err);
-        }
-      }
-    );
-
-    port.on("open", () => {
-      console.log("COM3 opened. Sending print job...");
-      port.write(rawCommands, (err) => {
-        if (err) {
-          console.error("write error:", err);
-          return reject(err);
-        }
-        console.log("Print data sent.");
-        port.close();
-        resolve(true);
-      });
-    });
-
-    port.on("error", (err) => {
-      console.error("Serial port error:", err);
-      reject(err);
-    });
-  });
-}
-
-module.exports = sendToPrinter;
+module.exports = function sendToPrinter(commands) {
+ if(process.env.PRINT_LOCAL_ENABLED!=="true")return Promise.reject(new Error("Local printer disabled"));
+ const {SerialPort}=require('serialport');
+ return new Promise((resolve,reject)=>{const port=new SerialPort({path:process.env.PRINTER_PORT||'COM3',baudRate:Number(process.env.PRINTER_BAUD||115200)});port.on('error',reject);port.on('open',()=>port.write(commands,e=>{if(e)return reject(e);port.drain(e=>{if(e)return reject(e);port.close(e=>e?reject(e):resolve(true));});}));});
+};

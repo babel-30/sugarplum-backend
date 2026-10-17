@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /admin
+Disallow: /project.html
+Disallow: /private-shop.html
+Disallow: /cart.html
+Disallow: /thank-you.html
+Sitemap: https://brackishroots.com/sitemap.xml

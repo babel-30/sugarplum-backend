@@ -1,0 +1,9 @@
+#hat-builder-workspace { align-items:start; }
+@media(max-width:760px) { #hat-builder-workspace { grid-template-columns:minmax(0,1fr); }
+  #hat-builder-workspace[data-step="3"] .hat-builder-preview,
+  #hat-builder-workspace[data-step="4"] .hat-builder-preview { grid-row:1; }
+  #hat-builder-workspace[data-step="3"] .hat-builder-preview-details,
+  #hat-builder-workspace[data-step="4"] .hat-builder-preview-details { display:none; }
+  #hat-builder-workspace[data-step="3"] .hat-builder-preview-stage,
+  #hat-builder-workspace[data-step="4"] .hat-builder-preview-stage { min-height:0; height:auto; aspect-ratio:1; }
+}

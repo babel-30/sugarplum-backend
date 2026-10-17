@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Kiosk Mode – Brackish Roots</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="brackish-theme.css"><link rel="icon" href="assets/brackish-roots-logo.png"><meta name="theme-color" content="#233E39"><script defer src="variation-options.js"></script>
+</head>
+  <body class="kiosk" data-brand="brackish-roots">
+    <a class="br-skip" href="#kiosk-main">Skip to content</a><div class="br-topbar"><div class="br-wrap"><span>Gulf Coast • Mississippi</span><span class="br-topbar-note">Coastal apparel &amp; custom creations</span></div></div><header class="br-header"><div class="br-wrap br-header-inner"><a href="kiosk.html" class="br-brand" aria-label="Brackish Roots home"><img class="br-logo" src="assets/brackish-roots-logo.png" alt="Brackish Roots — Gulf Coast, MS" width="206" height="206"></a><span class="br-kiosk-badge">In-store browsing</span></div></header><!-- Shared floral header with logo -->
+    <!-- Main kiosk content (JS shows/hides this vs. splash) -->
+    <main id="kiosk-main">
+      <!-- Kiosk hero text -->
+      <section class="kiosk-hero">
+        <p class="br-eyebrow">Rooted in the Coast. Made for the Outdoors.</p><h1>Browse Our On-Hand Apparel</h1>
+        <p>
+          View available T-Shirts, Hoodies, and Sweatshirts by size and color.
+          Ask us when you’re ready to check out.
+        </p>
+      </section>
+
+      <!-- Type filters + search/size/color -->
+      <div id="kiosk-filters">
+        <div class="kiosk-filter-row">
+          <button data-filter="all" class="active" type="button">All</button>
+          <button data-filter="T-Shirts" type="button">T-Shirts</button>
+          <button data-filter="Hoodies" type="button">Hoodies</button>
+          <button data-filter="Sweatshirts" type="button">Sweatshirts</button>
+        </div>
+
+        <div class="kiosk-filter-row kiosk-extra-filters">
+          <input type="text" id="kiosk-search" placeholder="Search design..." autocomplete="off" aria-label="Search designs">
+
+          <select id="kiosk-size-filter" aria-label="Filter by size">
+            <option value="">All Sizes</option>
+            <!-- Filled dynamically -->
+          </select>
+
+          <select id="kiosk-color-filter" aria-label="Filter by color">
+            <option value="">All Colors</option>
+            <!-- Filled dynamically -->
+          </select>
+
+          <button id="kiosk-clear-filters" type="button">Clear Filters</button>
+        </div>
+      </div>
+
+      <!-- Audience filters -->
+      <section id="kiosk-audience-filters">
+        <button data-audience="all" class="active" type="button">All</button>
+        <button data-audience="Men/Unisex" type="button">Men / Unisex</button>
+        <button data-audience="Women" type="button">Women</button>
+        <button data-audience="Kids" type="button">Kids</button>
+      </section>
+
+      <!-- Product grid -->
+      <p id="br-catalog-status" class="br-catalog-status" role="status">Loading available products…</p><div id="kiosk-grid" aria-live="polite"></div>
+    <button id="br-catalog-retry" class="br-button br-retry" type="button" hidden>Try Again</button></main>
+
+    <!-- Shared image modal -->
+    <!-- Splash screen for inactivity -->
+    <div id="kiosk-splash" class="kiosk-splash hidden">
+      <div class="kiosk-splash-panel">
+        <img src="assets/brackish-roots-logo.png" alt="Brackish Roots logo" class="kiosk-splash-logo-img">
+        <h1>Browse our on-hand apparel!</h1>
+        <p>Tap anywhere to begin</p>
+      </div>
+    </div>
+
+    <!-- MOVE-TO-TOP BUTTON (script.js handles logic) -->
+    <button id="moveToTopBtn" class="move-to-top-btn" aria-label="Scroll back to top" type="button">
+      ↑ Top
+    </button>
+
+    <!-- ORDER MATTERS (config.js MUST load first) -->
+    <div id="image-modal" class="image-modal hidden"><div class="image-modal-backdrop"></div><div class="image-modal-dialog" role="dialog" aria-modal="true" aria-label="Product image viewer"><button type="button" class="image-modal-close" aria-label="Close image viewer">×</button><div class="image-modal-main"><img class="image-modal-img" id="image-modal-img" src="" alt=""></div><div class="image-modal-gallery"></div><div class="image-modal-caption" id="image-modal-caption"></div></div></div><script src="stock-alerts.js"></script><script src="config.js"></script>
+    <script src="script.js"></script>
+  <footer class="br-footer br-kiosk-footer"><div class="br-wrap">Brackish Roots • Gulf Coast, Mississippi<br>Ask us when you’re ready to check out.</div></footer><script src="brackish-ui.js"></script><script src="photo-watermarks.js"></script></body>
+</html>

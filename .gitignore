@@ -134,3 +134,22 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Durable business data and local secrets
+.env
+.env.*
+!.env.example
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+exports/
+
+# Business settings and artwork are migrated privately onto the persistent disk.
+/adminConfig.json
+/productConfig.json
+/patchesConfig.json
+/public/uploads/
+/labels-test.pdf
+*.pem
+*.key

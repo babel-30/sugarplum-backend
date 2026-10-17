@@ -1,66 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <title>Admin Login – Sugar Plum Creations</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="styles-admin.css" />
-    <!-- Make API_BASE available -->
+    <meta charset="UTF-8">
+    <title>Admin Login – Brackish Roots</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Make API_BASE available (same-origin on backend) -->
     <script src="config-admin.js"></script>
-  </head>
-  <body class="admin">
+  <link rel="stylesheet" href="business-admin.css"></head>
+
+  <body class="business-admin login-page">
     <!-- Shared header -->
-    <header class="header">
-      <div class="header-brand">
-        <img
-          src="spc-logo-round.png"
-          alt="Sugar Plum Creations logo"
-          class="header-logo-img"
-        />
-        <a href="index.html" class="brand-link">
-          <span class="brand-logo-text">Sugar Plum Creations</span>
-        </a>
-      </div>
-
-      <nav class="header-nav">
-        <a href="kiosk.html" class="nav-link">Kiosk</a>
-        <a href="admin-login.html" class="nav-link nav-link-active">Admin</a>
-      </nav>
-    </header>
-
-    <main class="admin-main">
+    <header class="business-header"><img src="assets/brackish-roots-logo.png" alt="Brackish Roots"><div><strong>BRACKISH ROOTS</strong><span>Business workspace</span></div><a href="/">Open storefront ↗</a></header><main class="login-main">
       <section class="card admin-section">
         <h2>Admin Login</h2>
-        <p class="admin-help-text">
-          Enter your credentials to access the admin dashboard.
-        </p>
+        <p class="admin-help-text">Enter your credentials to access the admin dashboard.</p>
 
-        <form id="login-form" class="admin-form">
+        <form id="login-form" class="admin-form" autocomplete="on">
           <label class="admin-label" for="username">Username</label>
-          <input
-            id="username"
-            name="username"
-            type="text"
-            class="admin-input"
-            autocomplete="username"
-            required
-          />
+          <input id="username" name="username" type="text" class="admin-input" autocomplete="username" required>
 
           <label class="admin-label" for="password">Password</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            class="admin-input"
-            autocomplete="current-password"
-            required
-          />
+          <input id="password" name="password" type="password" class="admin-input" autocomplete="current-password" required>
 
-          <button type="submit" class="btn-primary">
-            Log In
-          </button>
+          <label class="check"><input id="show-password" type="checkbox">Show password</label><button type="submit" class="btn-primary">Log In</button>
 
-          <p id="login-status" class="admin-status"></p>
+          <p id="login-status" class="admin-status" role="status" aria-live="polite"></p>
         </form>
       </section>
     </main>
@@ -72,65 +36,70 @@
         const usernameInput = document.getElementById("username");
         const passwordInput = document.getElementById("password");
 
-        function showStatus(message, isError) {
+        function showStatus(message, isError = false) {
           if (!statusEl) return;
           statusEl.textContent = message || "";
-          statusEl.style.color = isError ? "red" : "black";
+          // Better contrast on your dark theme:
+          statusEl.style.color = isError ? "#a23b32" : "#256044";
         }
+
+        // Normalize admin paths (avoids relative-path weirdness)
+        const ADMIN_HOME_PATH = "/admin";       // should serve the admin dashboard
+        const ADMIN_LOGIN_PATH = "/admin-login";
 
         // If already logged in, skip straight to admin dashboard
         (async () => {
           try {
             const res = await fetch(`${API_BASE}/admin/me`, {
               credentials: "include",
+              cache: "no-store",
             });
+
             if (res.ok) {
-              window.location.href = "admin.html";
+              window.location.replace(ADMIN_HOME_PATH);
             }
           } catch (err) {
-            console.warn("Admin pre-check failed (ok on local):", err);
+            // Not fatal—could be offline/local first load
+            console.warn("Admin pre-check failed:", err);
           }
         })();
 
+        document.getElementById('show-password').addEventListener('change',e=>{passwordInput.type=e.target.checked?'text':'password';});
         form.addEventListener("submit", async (e) => {
           e.preventDefault();
           showStatus("Logging in…", false);
 
-          const username = usernameInput.value.trim();
-          const password = passwordInput.value;
+          const username = (usernameInput.value || "").trim();
+          const password = passwordInput.value || "";
 
           if (!username || !password) {
             showStatus("Please enter both username and password.", true);
             return;
           }
 
+          const button=form.querySelector('button[type="submit"]');button.disabled=true;
           try {
             const res = await fetch(`${API_BASE}/admin/login`, {
               method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              credentials: "include", // important for sessions
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              cache: "no-store",
               body: JSON.stringify({ username, password }),
             });
 
             const data = await res.json().catch(() => ({}));
 
             if (!res.ok) {
-              showStatus(
-                data.error || "Login failed. Check your credentials.",
-                true
-              );
+              showStatus(data.error || "Login failed. Check your credentials.", true);
               return;
             }
 
-            // Success
             showStatus("Login successful. Redirecting…", false);
-            window.location.href = "admin.html";
+            window.location.replace(ADMIN_HOME_PATH);
           } catch (err) {
             console.error("Login error:", err);
             showStatus("Error connecting to server. Try again.", true);
-          }
+          } finally {button.disabled=false;}
         });
       });
     </script>

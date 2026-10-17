@@ -1,0 +1,3 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict'),nodemailer=require('nodemailer');
+test('updated email dependency supports queued-message payloads without sending SMTP',async()=>{const transport=nodemailer.createTransport({jsonTransport:true});try{const result=await transport.sendMail({from:'brackishroots@gmail.com',replyTo:'brackishroots@gmail.com',to:'test@example.test',subject:'Brackish Roots test',text:'A private quote is ready.'});const message=JSON.parse(result.message.toString());assert.equal(message.subject,'Brackish Roots test');assert.equal(message.to[0].address,'test@example.test');assert.equal(message.text,'A private quote is ready.');}finally{transport.close();}});

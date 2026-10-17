@@ -1,0 +1,27 @@
+# .htaccess at /public_html  (Sugar Plum)
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # --- DEBUG TEST RULE ---
+  # If you visit /test-htaccess in the browser, this should
+  # serve index.html instead of a 404. This proves .htaccess is used.
+  RewriteRule ^test-htaccess$ /index.html [L]
+
+  # --- API / BACKEND ROUTES TO NODE (PORT 3000) ---
+  # These are the routes your frontend calls: /products, /checkout,
+  # /debug-catalog, and /admin /admin/...
+  RewriteCond %{REQUEST_URI} ^/(products|checkout|debug-catalog|admin(|/.*))$
+  RewriteRule ^(.*)$ http://127.0.0.1:3000/$1 [P,L]
+
+  # --- SPA FALLBACK ---
+  # Let real files/folders through; everything else goes to index.html
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
+
+<IfModule mod_proxy.c>
+  ProxyPreserveHost On
+</IfModule>

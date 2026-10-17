@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Apparel – Brackish Roots</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="brackish-theme.css"><link rel="icon" href="assets/brackish-roots-logo.png"><meta name="theme-color" content="#233E39"><link rel="stylesheet" href="apparel-builder.css"><script defer src="variation-options.js"></script>
+</head>
+
+  <body data-category="apparel" data-brand="brackish-roots">
+    <a class="br-skip" href="#main">Skip to content</a><div class="br-topbar"><div class="br-wrap"><span>Gulf Coast • Mississippi</span><span class="br-topbar-note">Coastal apparel &amp; custom creations</span></div></div><header class="br-header"><div class="br-wrap br-header-inner"><a href="index.html" class="br-brand" aria-label="Brackish Roots home"><img class="br-logo" src="assets/brackish-roots-logo.png" alt="Brackish Roots — Gulf Coast, MS" width="206" height="206"></a><button class="br-menu-toggle" type="button" aria-expanded="false" aria-controls="br-navigation">Menu</button><nav id="br-navigation" class="br-nav" aria-label="Main navigation"><a href="index.html">Home</a><a href="apparel.html" aria-current="page">Apparel</a><a href="hats.html?mode=shop">Hats</a><a href="prints.html">3D Prints</a><a href="patches.html">Patches</a><a href="custom-orders.html">Custom Orders</a></nav><a href="cart.html" class="br-cart" aria-label="View shopping cart"><svg viewbox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 4h4l4 18h17l3-13H8"></path><circle cx="12" cy="28" r="2"></circle><circle cx="25" cy="28" r="2"></circle></svg><span class="br-cart-label">Cart</span><span class="br-count" data-br-cart-count>0</span></a></div></header><!-- Shared floral header -->
+    <!-- Global Brackish Roots alert modal -->
+    <div id="spc-alert-overlay" class="spc-alert-overlay">
+      <div class="spc-alert spc-alert-info">
+        <h3 class="spc-alert-title">Heads up!</h3>
+        <p class="spc-alert-message"></p>
+        <button class="spc-alert-button" type="button">OK</button>
+      </div>
+    </div>
+
+    <!-- Announcement bar (populated from /admin/config) -->
+    <section class="announcement-bar" id="announcement-bar">
+      <div class="announcement-inner">
+        <span id="announcement-text"></span>
+      </div>
+    </section>
+
+    <!-- Shop Splash Overlay (controlled via admin config) -->
+    <section id="shop-splash" class="shop-splash hidden">
+      <div class="shop-splash-inner">
+        <img src="assets/brackish-roots-logo.png" alt="Brackish Roots logo" class="shop-splash-logo">
+        <h2 class="shop-splash-title">Online Shop Temporarily Closed</h2>
+        <p id="shop-splash-message"></p>
+      </div>
+    </section>
+
+    <main id="main">
+      <!-- HERO -->
+      <section class="hero">
+        <p class="br-eyebrow">Rooted in the Coast. Made for the Outdoors.</p><h1>Apparel</h1>
+        <p>Everyday apparel inspired by the water, wildlife, and places we call home. Find your favorite design, then make it yours.</p>
+
+        <div class="hero-actions">
+          <a href="#shop" class="hero-button">Shop Apparel</a>
+          <a href="custom-orders.html" class="hero-button hero-button-secondary">Request a Custom Quote</a>
+        </div>
+      </section>
+
+      <!-- SHOP SECTION -->
+      <div class="apparel-modes"><button type="button" class="br-button" id="apparel-build-tab">Build Your Apparel</button><button type="button" class="br-button" id="apparel-shop-tab">Shop Premade Apparel</button></div><section class="apparel-builder" id="apparel-builder"><h2>Build Your Apparel</h2><p>Choose your garment, print locations, and favorite designs.</p><div class="apparel-progress"><div data-apparel-progress="1">1. Garment</div><div data-apparel-progress="2">2. Design</div><div data-apparel-progress="3">3. Personalize</div><div data-apparel-progress="4">4. Review</div></div>
+<div class="apparel-workspace"><div class="apparel-controls"><section data-apparel-step="1"><h2>Choose your garment</h2><div class="apparel-garment-grid" id="apparel-garments"></div><div class="apparel-fields" id="apparel-variation-options"></div><p id="apparel-stock"></p><button class="br-button" id="apparel-stock-alert" type="button" hidden>Notify me when available</button><div class="apparel-actions"><button class="br-button br-button-orange" id="apparel-next-design" type="button">Choose a design →</button></div></section>
+<section data-apparel-step="2" hidden><h2>Choose your print location and designs</h2><label>Print location<select id="apparel-location"><option>Pocket</option><option selected>Front</option><option>Back</option><option>Front &amp; Back</option></select></label><p>Front &amp; Back includes two full-size prints and charges for each side.</p><div class="apparel-categories" id="apparel-categories"></div><label>Find a design<input id="apparel-search" type="search" placeholder="Search apparel designs"></label><div id="apparel-design-list"></div><div class="apparel-actions"><button class="br-button" data-apparel-back="1" type="button">← Garment</button><button class="br-button br-button-orange" id="apparel-next-personalize" type="button">Personalize / continue →</button></div></section>
+<section data-apparel-step="3" hidden><h2>Personalize your design</h2><div id="apparel-personalization"></div><p>Check every name, initial, and number carefully. Use the design preview as your visual reference and check the exact personalized text before ordering. No separate customer proof will be sent.</p><div class="apparel-actions"><button class="br-button" data-apparel-back="2" type="button">← Designs</button><button class="br-button br-button-orange" id="apparel-next-review" type="button">Review your apparel →</button></div></section>
+<section data-apparel-step="4" hidden><h2 id="apparel-review-title">Review your apparel</h2><p id="apparel-review-options"></p><h3 id="apparel-review-price"></h3><p id="apparel-proof-info"></p><label class="spelling-check" id="apparel-review-confirm-wrap" hidden><input type="checkbox" id="apparel-review-confirm">I checked the exact spelling, capitalization, and personalization above. Customer-entered spelling errors are not eligible for refunds or replacements.</label><div class="apparel-actions"><button class="br-button" data-apparel-back="3" type="button">← Personalization</button><button class="br-button br-button-orange" type="button" id="apparel-add-cart" disabled>Add to cart</button><a href="cart.html" class="br-button" id="apparel-view-cart" hidden>View cart →</a></div></section>
+</div><aside class="apparel-live-panel" aria-label="Live apparel preview"><div class="apparel-live-heading"><span class="apparel-preview-eyebrow">YOUR APPAREL</span><h3 id="apparel-live-title">Choose a garment to start</h3><p id="apparel-live-variant"></p></div><div id="apparel-preview-tabs" class="apparel-preview-tabs"></div><div class="apparel-review-previews" id="apparel-review-previews"></div><div class="apparel-live-details"><p id="apparel-live-selections"></p><div class="apparel-live-total"><span id="apparel-live-price-label">Garment price</span><strong id="apparel-live-price"></strong></div><p class="photo-watermark-note">The design preview is your visual reference. Exact personalized text is listed above; check its spelling and capitalization before ordering.</p></div></aside></div><p id="apparel-status" role="status" aria-live="polite"></p><div class="customer-panel"><h3>Have your own artwork?</h3><p>Request a custom quote for hats, apparel, or both. Upload up to 10 high-quality files. We review your artwork, prepare a proof and quote, and collect payment after approval. Ask about a private shop link for your team or group.</p><button class="br-button" id="apparel-request-quote" type="button">Request a Custom Quote</button></div></section><section id="shop">
+        <h2>Find Your Coast</h2>
+
+        <!-- Category filters: keep these if you want, but we’ll also auto-filter the page by Apparel -->
+        <div id="category-filters" class="kiosk-filter-row">
+          <button data-filter="all" class="active" type="button">All</button>
+          <button data-filter="T-Shirts" type="button">T-Shirts</button>
+          <button data-filter="Hoodies" type="button">Hoodies</button>
+          <button data-filter="Sweatshirts" type="button">Sweatshirts</button>
+        </div>
+
+        <!-- Cart bar -->
+        <div id="cart-bar-container">
+          <div id="cart-bar">
+            <span>
+              Cart: <span id="cart-count">0</span> items — $
+              <span id="cart-total">0.00</span>
+            </span>
+            <a href="cart.html" class="view-cart-button">View Cart</a>
+          </div>
+        </div>
+
+        <!-- Search / size / color filters -->
+        <div id="shop-filters" class="kiosk-filter-row kiosk-extra-filters">
+          <input type="text" id="shop-search" placeholder="Search..." autocomplete="off" aria-label="Search products">
+
+          <select id="shop-size-filter" aria-label="Filter by size">
+            <option value="">All Sizes</option>
+          </select>
+
+          <select id="shop-color-filter" aria-label="Filter by color">
+            <option value="">All Colors</option>
+          </select>
+
+          <button id="shop-clear-filters" type="button">Clear Filters</button>
+        </div>
+
+        <!-- Audience filters row -->
+        <section id="audience-filters">
+          <button data-audience="all" class="active" type="button">All</button>
+          <button data-audience="Men/Unisex" type="button">Men / Unisex</button>
+          <button data-audience="Women" type="button">Women</button>
+          <button data-audience="Kids" type="button">Kids</button>
+        </section>
+
+        <!-- Product grid -->
+        <p id="br-catalog-status" class="br-catalog-status" role="status">Loading available products…</p><div id="product-grid" aria-live="polite"></div>
+      <button id="br-catalog-retry" class="br-button br-retry" type="button" hidden>Try Again</button></section>
+    </main>
+
+    <button id="moveToTopBtn" class="move-to-top-btn" aria-label="Scroll back to top" type="button">
+      ↑ Top
+    </button>
+
+    <!-- ORDER MATTERS -->
+    <div id="image-modal" class="image-modal hidden"><div class="image-modal-backdrop"></div><div class="image-modal-dialog" role="dialog" aria-modal="true" aria-label="Product image viewer"><button type="button" class="image-modal-close" aria-label="Close image viewer">×</button><div class="image-modal-main"><img class="image-modal-img" id="image-modal-img" src="" alt=""></div><div class="image-modal-gallery"></div><div class="image-modal-caption" id="image-modal-caption"></div></div></div><script src="stock-alerts.js"></script><script src="config.js"></script>
+    <script src="apparel-placement.js"></script><script src="apparel-builder.js"></script><script src="script.js"></script>
+
+    <!-- Floating Social Buttons -->
+    <footer class="br-footer"><div class="br-wrap"><div class="br-footer-grid"><a href="index.html" aria-label="Brackish Roots home"><img src="assets/brackish-roots-logo.png" alt="Brackish Roots" class="br-footer-logo" width="115" height="115" loading="lazy"></a><div><h2>Shop</h2><a href="apparel.html">Apparel</a><a href="hats.html?mode=shop">Hats</a><a href="prints.html">3D Prints</a><a href="patches.html">Standalone Patches</a><a href="hats.html?mode=build">Build Your Hat</a></div><div><h2>Explore</h2><a href="index.html#our-story">Our Story</a><a href="index.html#coastal-life">Gulf Coast Lifestyle</a><a href="cart.html">Your Cart</a><a href="https://www.facebook.com/profile.php?id=61554519952229" target="_blank" rel="noopener">Facebook</a></div><div><h2>Make It Yours</h2><p>Your favorite hat. Your own patch.<br>A little piece of the coast, made for you.</p><a class="br-button br-button-orange" href="hats.html?mode=build">Build your hat <span aria-hidden="true">→</span></a></div></div><div class="br-footer-bottom"><span>© 2026 Brackish Roots • Gulf Coast, Mississippi</span><span>Rooted in the Coast. Made for the Outdoors.</span></div></div></footer><script src="brackish-ui.js"></script><script src="brackish-analytics.js"></script><script src="photo-watermarks.js"></script></body>
+</html>

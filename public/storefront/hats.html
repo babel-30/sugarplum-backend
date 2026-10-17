@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+
+    <title>Hats – Brackish Roots</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="brackish-theme.css"><link rel="stylesheet" href="hat-preview.css"><link rel="icon" href="assets/brackish-roots-logo.png"><meta name="theme-color" content="#233E39"><script defer src="variation-options.js"></script>
+</head>
+
+  <body data-category="hats" data-brand="brackish-roots">
+
+    <a class="br-skip" href="#main">Skip to content</a><div class="br-topbar"><div class="br-wrap"><span>Gulf Coast • Mississippi</span><span class="br-topbar-note">Coastal apparel &amp; custom creations</span></div></div><header class="br-header"><div class="br-wrap br-header-inner"><a href="index.html" class="br-brand" aria-label="Brackish Roots home"><img class="br-logo" src="assets/brackish-roots-logo.png" alt="Brackish Roots — Gulf Coast, MS" width="206" height="206"></a><button class="br-menu-toggle" type="button" aria-expanded="false" aria-controls="br-navigation">Menu</button><nav id="br-navigation" class="br-nav" aria-label="Main navigation"><a href="index.html">Home</a><a href="apparel.html">Apparel</a><a href="hats.html?mode=shop" aria-current="page">Hats</a><a href="prints.html">3D Prints</a><a href="patches.html">Patches</a><a href="custom-orders.html">Custom Orders</a></nav><a href="cart.html" class="br-cart" aria-label="View shopping cart"><svg viewbox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 4h4l4 18h17l3-13H8"></path><circle cx="12" cy="28" r="2"></circle><circle cx="25" cy="28" r="2"></circle></svg><span class="br-cart-label">Cart</span><span class="br-count" data-br-cart-count>0</span></a></div></header><!-- =====================================================
+         HEADER
+         ===================================================== -->
+
+    <!-- =====================================================
+         GLOBAL ALERT
+         ===================================================== -->
+
+    <div id="spc-alert-overlay" class="spc-alert-overlay">
+      <div class="spc-alert spc-alert-info">
+
+        <h3 class="spc-alert-title">
+          Heads up!
+        </h3>
+
+        <p class="spc-alert-message"></p>
+
+        <button class="spc-alert-button" type="button">
+          OK
+        </button>
+
+      </div>
+    </div>
+
+
+    <!-- =====================================================
+         ANNOUNCEMENT BAR
+         ===================================================== -->
+
+    <section class="announcement-bar" id="announcement-bar">
+      <div class="announcement-inner">
+        <span id="announcement-text"></span>
+      </div>
+    </section>
+
+
+    <!-- =====================================================
+         TEMPORARY SHOP CLOSED SPLASH
+         ===================================================== -->
+
+    <section id="shop-splash" class="shop-splash hidden">
+      <div class="shop-splash-inner">
+
+        <img src="assets/brackish-roots-logo.png" alt="Brackish Roots logo" class="shop-splash-logo">
+
+        <h2 class="shop-splash-title">
+          Online Shop Temporarily Closed
+        </h2>
+
+        <p id="shop-splash-message"></p>
+
+      </div>
+    </section>
+
+
+    <main id="main">
+
+      <!-- ===================================================
+           HATS HERO
+           =================================================== -->
+
+      <section class="hero hats-hero">
+
+        <p class="br-eyebrow">Rooted in the Coast. Made for the Outdoors.</p><h1>Your Hat. Your Roots.</h1>
+
+        <p>
+          Pick a Brackish Roots favorite or create a hat
+          that's uniquely yours.
+        </p>
+
+      </section>
+
+
+      <!-- ===================================================
+           HAT MODE SWITCH
+           =================================================== -->
+
+      <section class="hat-mode-section">
+
+        <div class="hat-mode-switch" role="tablist" aria-label="Hat shopping options">
+
+          <button id="hat-mode-build" class="hat-mode-button active" type="button" role="tab" aria-selected="true" data-hat-mode="build" aria-controls="hat-build-mode">
+            Build Your Hat
+          </button>
+
+          <button id="hat-mode-shop" class="hat-mode-button" type="button" role="tab" aria-selected="false" data-hat-mode="shop" aria-controls="hat-shop-mode">
+            Shop Premade Hats
+          </button>
+
+        </div>
+
+      </section>
+
+
+      <!-- ===================================================
+           BUILD YOUR HAT MODE
+           =================================================== -->
+
+      <section id="hat-build-mode" class="hat-mode-panel" data-hat-panel="build" role="tabpanel" aria-labelledby="hat-mode-build">
+
+        <section id="build-your-hat" class="hat-builder-intro">
+
+          <div class="hat-builder-intro-inner">
+
+            <!-- =============================================
+                 BUILDER HEADING
+                 ============================================= -->
+
+            <div class="hat-builder-heading">
+
+              <span class="hat-builder-eyebrow">
+                Make It Yours
+              </span>
+
+              <h2>
+                Build Your Hat
+              </h2>
+
+              <p>
+                Choose your hat, pick your favorite Brackish Roots
+                patch, preview your combination, and we'll make
+                it for you.
+              </p>
+
+            </div>
+
+
+            <!-- =============================================
+                 BUILDER PROGRESS STEPS
+                 ============================================= -->
+
+            <div class="hat-builder-steps">
+
+              <button class="hat-builder-step active" data-builder-step="1" type="button" aria-label="Go to step 1">
+                <span class="hat-builder-step-number">
+                  1
+                </span>
+
+                <span class="br-step-title">
+                  Choose Your Hat
+                </span>
+
+                <p>
+                  Select your hat style and color.
+                </p>
+              </button>
+
+
+              <button class="hat-builder-step" data-builder-step="2" type="button" aria-label="Go to step 2">
+                <span class="hat-builder-step-number">
+                  2
+                </span>
+
+                <span class="br-step-title">
+                  Choose Your Patch
+                </span>
+
+                <p>
+                  Browse our available laser-engraved
+                  patch designs.
+                </p>
+              </button>
+
+
+              <button class="hat-builder-step" data-builder-step="3" type="button" aria-label="Go to step 3">
+                <span class="hat-builder-step-number">
+                  3
+                </span>
+
+                <span class="br-step-title">
+                  Preview It
+                </span>
+
+                <p>
+                  See your hat and patch together before
+                  ordering.
+                </p>
+              </button>
+
+
+              <button class="hat-builder-step" data-builder-step="4" type="button" aria-label="Go to step 4">
+                <span class="hat-builder-step-number">
+                  4
+                </span>
+
+                <span class="br-step-title">Review Your Design</span>
+
+                <p>
+                  Save your design or add your finished hat to the cart.
+                </p>
+              </button>
+
+            </div>
+
+
+            <!-- =============================================
+                 BUILDER WORKSPACE
+                 ============================================= -->
+
+            <div id="hat-builder-workspace" class="hat-builder-workspace">
+
+              <!-- ===========================================
+                   LEFT SIDE - BUILDER CONTROLS
+                   =========================================== -->
+
+              <div class="hat-builder-controls">
+
+
+                <!-- =========================================
+                     STEP 1 - CHOOSE HAT
+                     ========================================= -->
+
+                <section id="hat-builder-step-hat" class="hat-builder-panel active" data-builder-panel="1">
+
+                  <div class="hat-builder-panel-heading">
+
+                    <span class="hat-builder-panel-step">
+                      Step 1
+                    </span>
+
+                    <h3>
+                      Choose Your Hat
+                    </h3>
+
+                    <p>
+                      Start by choosing the hat style you
+                      want to customize.
+                    </p>
+
+                  </div>
+
+
+                  <!-- Hat styles populated from Square -->
+
+                  <div class="hat-builder-loading" id="hat-builder-hat-loading">
+                      Loading available hats...
+                    </div>
+
+                  <div id="hat-builder-hat-options" class="hat-builder-hat-options">
+
+                    </div>
+
+
+                  <!-- Color selector -->
+
+                  <div id="hat-builder-color-section" class="hat-builder-color-section hidden">
+
+                    <div class="hat-builder-option-heading">
+
+                      <h4>
+                        Choose Your Color
+                      </h4>
+
+                      <span id="hat-builder-selected-color" class="hat-builder-selected-value"></span>
+
+                    </div>
+
+
+                    <select id="hat-builder-color-options" class="hat-builder-color-select" aria-label="Choose your hat color"></select>
+
+                  </div>
+
+
+                  <!-- Selected variation inventory -->
+
+                  <div id="hat-builder-stock" class="hat-builder-stock hidden"></div>
+
+
+                  <!-- Continue -->
+
+                  <div class="hat-builder-actions">
+
+                    <button id="hat-builder-next-patch" class="hat-builder-next-button" type="button" disabled>
+                      Next: Choose Your Patch
+                    </button>
+
+                  </div>
+
+                </section>
+
+
+                <!-- =========================================
+                     STEP 2 - CHOOSE PATCH
+                     ========================================= -->
+
+                <section id="hat-builder-patch-section" class="hat-builder-panel hidden" data-builder-panel="2">
+
+                  <div class="hat-builder-panel-heading">
+
+                    <span class="hat-builder-panel-step">
+                      Step 2
+                    </span>
+
+                    <h3>
+                      Choose Your Patch
+                    </h3>
+
+                    <p>
+                      Pick one of our available Brackish Roots
+                      patch designs.
+                    </p>
+
+                  </div>
+
+
+                  <div id="hat-builder-patch-categories" class="br-patch-categories" aria-label="Patch categories"></div><label class="br-patch-search">Find a patch<input id="hat-builder-patch-search" type="search" placeholder="Search patch designs" autocomplete="off"></label><p class="hat-builder-selected-value">Selected patch: <span id="hat-builder-selected-patch">Not selected</span></p><div id="hat-builder-patch-pages" class="br-patch-categories" aria-label="Patch pages"></div><div class="hat-builder-loading" id="hat-builder-patch-loading">
+                      Loading available patches...
+                    </div>
+
+                  <div id="hat-builder-patch-options" class="hat-builder-patch-options">
+
+                    </div>
+
+
+                  <div id="hat-builder-patch-variants" class="br-patch-variants" hidden></div><div class="hat-builder-actions">
+
+                    <button id="hat-builder-back-hat" class="hat-builder-back-button" type="button">
+                      Back
+                    </button>
+
+                    <button id="hat-builder-next-preview" class="hat-builder-next-button" type="button" disabled>
+                      Next: Preview Your Hat
+                    </button>
+
+                  </div>
+
+                </section>
+
+
+                <!-- =========================================
+                     STEP 3 - PREVIEW
+                     ========================================= -->
+
+                <section id="hat-builder-step-preview" class="hat-builder-panel hidden" data-builder-panel="3">
+
+                  <div class="hat-builder-panel-heading">
+
+                    <span class="hat-builder-panel-step">
+                      Step 3
+                    </span>
+
+                    <h3>
+                      Preview Your Hat
+                    </h3>
+
+                    <p>
+                      See how your selected hat and patch
+                      look together.
+                    </p>
+
+                  </div>
+
+
+                  <!-- Patch placement options -->
+
+                  <div class="hat-builder-placement">
+
+                    <div class="hat-builder-option-heading">
+
+                      <h4>
+                        Patch Placement
+                      </h4>
+
+                    </div>
+
+
+                    <div id="hat-builder-placement-options" class="hat-builder-placement-options">
+
+                      <button type="button" class="hat-placement-button active" data-placement="Center">
+                        Center
+                      </button>
+
+                      <button type="button" class="hat-placement-button" data-placement="Left">Wearer’s left</button>
+
+                      <button type="button" class="hat-placement-button" data-placement="Right">Wearer’s right</button>
+
+                    </div>
+
+                  </div>
+
+
+                  <div class="hat-builder-actions">
+
+                    <button id="hat-builder-back-patch" class="hat-builder-back-button" type="button">
+                      Back
+                    </button>
+
+                    <button id="hat-builder-next-cart" class="hat-builder-next-button" type="button">
+                      Looks Good
+                    </button>
+
+                  </div>
+
+                </section>
+
+
+                <!-- =========================================
+                     STEP 4 - ADD TO CART
+                     ========================================= -->
+
+                <section id="hat-builder-step-cart" class="hat-builder-panel hidden" data-builder-panel="4">
+
+                  <div class="hat-builder-panel-heading">
+
+                    <span class="hat-builder-panel-step">
+                      Step 4
+                    </span>
+
+                    <h3>Your Hat Design</h3>
+
+                    <p>Review your selections and finished price, then add your hat to the cart. Shipping and applicable charges are shown at checkout.</p>
+
+                  </div>
+
+
+                  <div id="hat-builder-summary" class="hat-builder-summary"></div>
+
+
+                  <div class="hat-builder-actions">
+
+                    <button id="hat-builder-back-preview" class="hat-builder-back-button" type="button">
+                      Back
+                    </button>
+
+                    <button id="hat-builder-add-cart" class="hat-builder-cart-button" type="button" aria-label="Save this custom hat design">Save Your Design</button>
+
+                  <button id="hat-builder-purchase" class="hat-builder-cart-button" type="button" hidden disabled>Add Finished Hat to Cart</button></div>
+
+                </section>
+
+              </div>
+
+
+              <!-- ===========================================
+                   RIGHT SIDE - LIVE PREVIEW
+                   =========================================== -->
+
+              <aside id="hat-builder-preview" class="hat-builder-preview">
+
+                <div class="hat-builder-preview-heading">
+
+                  <span>
+                    Your Hat
+                  </span>
+
+                  <h3 id="hat-builder-preview-title">
+                    Start Building
+                  </h3>
+
+                </div>
+
+
+                <div id="hat-builder-preview-stage" class="hat-builder-preview-stage">
+
+                  <!-- Hat image -->
+
+                  <img id="hat-builder-hat-image" class="hat-builder-hat-image hidden" src="" alt="Selected hat">
+
+
+                  <!-- Patch overlay -->
+
+                  <img id="hat-builder-patch-image" class="hat-builder-patch-image hidden" src="" alt="Selected patch">
+
+
+                  <!-- Empty state -->
+
+                  <div id="hat-builder-preview-empty" class="hat-builder-preview-empty">
+
+                    <div class="hat-builder-preview-empty-icon">
+                      ✦
+                    </div>
+
+                    <h4>
+                      Your Hat Starts Here
+                    </h4>
+
+                    <p>
+                      Choose a hat style and color to begin.
+                    </p>
+
+                  </div>
+
+                </div>
+
+
+                <button id="hat-builder-enlarge" class="hat-builder-back-button" type="button" disabled>View Larger</button><p id="hat-builder-preview-note" class="br-preview-note" role="status">Choose a hat to see your preview.</p><!-- Preview photo controls -->
+
+                <!-- Current selections -->
+
+                <div id="hat-builder-preview-details" class="hat-builder-preview-details hidden">
+
+                  <div class="hat-builder-preview-detail">
+
+                    <span>
+                      Hat
+                    </span>
+
+                    <strong id="hat-builder-detail-hat">
+                      —
+                    </strong>
+
+                  </div>
+
+
+                  <div class="hat-builder-preview-detail">
+
+                    <span>
+                      Color
+                    </span>
+
+                    <strong id="hat-builder-detail-color">
+                      —
+                    </strong>
+
+                  </div>
+
+
+                  <div class="hat-builder-preview-detail">
+
+                    <span>
+                      Patch
+                    </span>
+
+                    <strong id="hat-builder-detail-patch">
+                      —
+                    </strong>
+
+                  </div>
+
+
+                  <div class="hat-builder-preview-detail">
+
+                    <span>
+                      Placement
+                    </span>
+
+                    <strong id="hat-builder-detail-placement">
+                      Center
+                    </strong>
+
+                  </div>
+
+                <div class="hat-builder-preview-detail"><span>Hat starting price</span><strong id="hat-builder-price">—</strong></div></div>
+
+              </aside>
+
+            <section class="customer-panel"><h3>Your artwork, our custom work</h3><p>Upload up to 10 high-quality files for a custom hat or apparel quote. Proof approval comes before payment. Private shop links are available for teams and groups.</p><a class="br-button" id="hat-custom-quote" href="custom-orders.html">Request a Custom Quote</a></section></div>
+
+          </div>
+
+        </section>
+
+      </section>
+
+
+      <!-- ===================================================
+           PREMADE HATS MODE
+           =================================================== -->
+
+      <section id="hat-shop-mode" class="hat-mode-panel hidden" data-hat-panel="shop" role="tabpanel" aria-labelledby="hat-mode-shop">
+
+        <section id="shop">
+
+          <!-- Shop heading -->
+
+          <div class="hat-shop-heading">
+
+            <span class="hat-builder-eyebrow">
+              Ready To Go
+            </span>
+
+            <h2>
+              Shop Premade Hats
+            </h2>
+
+            <p>
+              Shop our ready-made Brackish Roots hats.
+            </p>
+
+          </div>
+
+
+          <!-- Cart bar -->
+
+          <div id="cart-bar-container">
+
+            <div id="cart-bar">
+
+              <span>
+                Cart:
+                <span id="cart-count">0</span>
+                items — $
+                <span id="cart-total">0.00</span>
+              </span>
+
+              <a href="cart.html" class="view-cart-button">
+                View Cart
+              </a>
+
+            </div>
+
+          </div>
+
+
+          <!-- Product filters -->
+
+          <div id="shop-filters" class="kiosk-filter-row kiosk-extra-filters">
+
+            <input type="text" id="shop-search" placeholder="Search hats..." autocomplete="off" aria-label="Search products">
+
+            <select id="shop-size-filter" aria-label="Filter by size">
+              <option value="">
+                All Sizes
+              </option>
+            </select>
+
+            <select id="shop-color-filter" aria-label="Filter by color">
+              <option value="">
+                All Colors
+              </option>
+            </select>
+
+            <button id="shop-clear-filters" type="button">
+              Clear Filters
+            </button>
+
+          </div>
+
+
+          <!-- Square product grid -->
+
+          <p id="br-catalog-status" class="br-catalog-status" role="status">Loading available products…</p><div id="product-grid" aria-live="polite"></div>
+
+        <button id="br-catalog-retry" class="br-button br-retry" type="button" hidden>Try Again</button></section>
+
+      </section>
+
+    </main>
+
+
+    <!-- =====================================================
+         MOVE TO TOP
+         ===================================================== -->
+
+    <button id="moveToTopBtn" class="move-to-top-btn" aria-label="Scroll back to top" type="button">
+      ↑ Top
+    </button>
+
+
+    <!-- =====================================================
+         FLOATING SOCIAL BUTTONS
+         ===================================================== -->
+
+    <!-- =====================================================
+         SCRIPTS
+         ===================================================== -->
+
+    <div id="image-modal" class="image-modal hidden"><div class="image-modal-backdrop"></div><div class="image-modal-dialog" role="dialog" aria-modal="true" aria-label="Product image viewer"><button type="button" class="image-modal-close" aria-label="Close image viewer">×</button><div class="image-modal-main"><img class="image-modal-img" id="image-modal-img" src="" alt=""></div><div class="image-modal-gallery"></div><div class="image-modal-caption" id="image-modal-caption"></div></div></div><script src="stock-alerts.js"></script><script src="config.js"></script>
+    <script src="script.js"></script>
+    <script src="hats.js"></script>
+
+  <footer class="br-footer"><div class="br-wrap"><div class="br-footer-grid"><a href="index.html" aria-label="Brackish Roots home"><img src="assets/brackish-roots-logo.png" alt="Brackish Roots" class="br-footer-logo" width="115" height="115" loading="lazy"></a><div><h2>Shop</h2><a href="apparel.html">Apparel</a><a href="hats.html?mode=shop">Hats</a><a href="prints.html">3D Prints</a><a href="patches.html">Standalone Patches</a><a href="hats.html?mode=build">Build Your Hat</a></div><div><h2>Explore</h2><a href="index.html#our-story">Our Story</a><a href="index.html#coastal-life">Gulf Coast Lifestyle</a><a href="cart.html">Your Cart</a><a href="https://www.facebook.com/profile.php?id=61554519952229" target="_blank" rel="noopener">Facebook</a></div><div><h2>Make It Yours</h2><p>Your favorite hat. Your own patch.<br>A little piece of the coast, made for you.</p><a class="br-button br-button-orange" href="hats.html?mode=build">Build your hat <span aria-hidden="true">→</span></a></div></div><div class="br-footer-bottom"><span>© 2026 Brackish Roots • Gulf Coast, Mississippi</span><span>Rooted in the Coast. Made for the Outdoors.</span></div></div></footer><script src="brackish-ui.js"></script><dialog id="hat-builder-preview-dialog" class="br-preview-dialog"><button id="hat-builder-close-preview" class="br-dialog-close" type="button" aria-label="Close hat preview">×</button><h2>Your Hat Preview</h2><div id="hat-builder-large-stage" class="hat-builder-preview-stage"></div><p>Visual preview only. Final placement may vary slightly.</p></dialog><script src="brackish-analytics.js"></script><script src="photo-watermarks.js"></script></body>
+</html>

@@ -1,164 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Admin Dashboard – Sugar Plum Creations</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="styles-admin.css" />
-  </head>
-  <body class="admin">
-    <!-- Shared header -->
-    <header class="header">
-      <div class="header-brand">
-        <img
-          src="spc-logo-round.png"
-          alt="Sugar Plum Creations logo"
-          class="header-logo-img"
-        />
-        <a href="index.html" class="brand-link">
-          <span class="brand-logo-text">Sugar Plum Creations</span>
-        </a>
-      </div>
-
-      <nav class="header-nav">
-        <a href="kiosk.html" class="nav-link">Kiosk</a>
-        <a href="admin.html" class="nav-link nav-link-active">Admin</a>
-      </nav>
-    </header>
-
-    <main class="admin-main">
-      <!-- Announcement Banner Card -->
-      <section class="card admin-section">
-        <h2>Announcement Banner</h2>
-        <p class="admin-help-text">
-          Update the message that appears at the top of the customer site.
-        </p>
-
-        <form id="banner-form" class="admin-form">
-          <label class="admin-label" for="bannerText">
-            Banner Text
-          </label>
-          <textarea
-            id="bannerText"
-            name="bannerText"
-            rows="3"
-            class="admin-input"
-            placeholder="Example: We’re at the Christmas Market this weekend! Orders ship on Monday."
-          ></textarea>
-
-          <label class="admin-checkbox">
-            <input type="checkbox" id="bannerVisible" name="bannerVisible" />
-            <span>Show banner on site</span>
-          </label>
-
-          <button type="submit" class="btn-primary">
-            Save Settings
-          </button>
-
-          <p id="banner-status" class="admin-status"></p>
-        </form>
-
-        <!-- Session timeout -->
-        <section class="admin-section">
-          <h2>Session Timeout</h2>
-
-          <label class="admin-checkbox">
-            <input type="checkbox" id="extend-timeout-toggle" />
-            <span>
-              Keep me logged in longer while doing inventory / barcode work
-              (4-hour timeout)
-            </span>
-          </label>
-        </section>
-
-        <!-- Shop Splash / Popup Controls -->
-        <div class="admin-subsection">
-          <h3>Shop Splash / Popup</h3>
-          <p class="admin-help-text">
-            Use this popup to temporarily close the online shop during events
-            or while you are updating inventory. This will show a full-screen
-            splash on the home/shop page (styled like the kiosk splash).
-          </p>
-
-          <div class="admin-form">
-            <label class="admin-checkbox">
-              <input type="checkbox" id="popupEnabled" />
-              <span>Enable shop splash popup</span>
-            </label>
-
-            <label class="admin-label" for="popupMode">
-              Popup Mode
-            </label>
-            <select id="popupMode" class="admin-input">
-              <option value="none">None</option>
-              <option value="event">Closed for Event</option>
-              <option value="inventory">Updating Inventory</option>
-              <option value="custom">Custom Message</option>
-            </select>
-
-            <label class="admin-label" for="popupCustomText">
-              Custom Popup Message
-            </label>
-            <textarea
-              id="popupCustomText"
-              rows="3"
-              class="admin-input"
-              placeholder="Example: Hey loyal customers! We’re currently at an event today, and to avoid selling the same item in-person and online, the online shop is temporarily closed. It’ll reopen once the event wraps up – thank you for your understanding!"
-            ></textarea>
-
-            <p id="popup-status" class="admin-status"></p>
-          </div>
-        </div>
-
-        <!-- Shipping Settings -->
-        <div class="admin-subsection">
-          <h3>Shipping Settings</h3>
-          <p class="admin-help-text">
-            These values control the shipping line added at checkout. The flat
-            rate is charged on orders below the free shipping threshold; orders
-            at or above the threshold get free shipping.
-            <br />
-            Be sure this threshold matches your free-shipping rules in Square.
-          </p>
-
-          <div class="admin-form">
-            <label class="admin-label" for="shippingFlatRate">
-              Flat-Rate Shipping ($)
-            </label>
-            <input
-              id="shippingFlatRate"
-              type="number"
-              step="0.01"
-              min="0"
-              class="admin-input"
-              placeholder="Example: 7.99"
-            />
-
-            <label class="admin-label" for="freeShippingThreshold">
-              Free Shipping Threshold ($)
-            </label>
-            <input
-              id="freeShippingThreshold"
-              type="number"
-              step="0.01"
-              min="0"
-              class="admin-input"
-              placeholder="Example: 75.00"
-            />
-
-            <p id="shipping-status" class="admin-status"></p>
-          </div>
-        </div>
-      </section>
-
-      <!-- Product Flags -->
-      <section class="card admin-section" id="flags-section">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brackish Roots | Business Admin</title><link rel="stylesheet" href="business-admin.css"><meta name="robots" content="noindex,nofollow"></head><body class="business-admin">
+<header class="business-header"><img src="assets/brackish-roots-logo.png" alt="Brackish Roots"><div><strong>BRACKISH ROOTS</strong><span>Business workspace</span></div><a href="/kiosk.html" target="_blank" rel="noopener">Open kiosk ↗</a><a href="/" target="_blank" rel="noopener">Open storefront ↗</a><button id="logout" type="button">Log out</button></header>
+<div class="business-layout"><nav class="business-nav" aria-label="Admin sections"><span class="nav-group">Daily work</span><button type="button" data-tab="dashboard">Overview</button><button type="button" data-tab="orders">Orders &amp; Production</button><button type="button" data-tab="paid-proofs">Paid Personalization Proofs</button><button type="button" data-tab="projects">Projects &amp; Quotes</button><button type="button" data-tab="shops">Group Shops</button><span class="nav-group">Products &amp; stock</span><button type="button" data-tab="catalog">Products</button><button type="button" data-tab="patches">Patches &amp; Categories</button><button type="button" data-tab="custom-options">Custom Order Options</button><button type="button" data-tab="apparel-designs">Apparel Designs</button><button type="button" data-tab="inventory">Inventory &amp; Labels</button><button type="button" data-tab="sourcing">Job Supplies &amp; Sourcing</button><span class="nav-group">Manage business</span><button type="button" data-tab="storefront">Storefront Settings</button><button type="button" data-tab="settings">Business Settings</button><button type="button" data-tab="analytics">Analytics</button><button type="button" data-tab="mail">Email Delivery</button><button type="button" data-tab="backups">Backups &amp; Session</button><span class="nav-foot">Brackish Roots<br>Owner workspace</span></nav><main><p id="status" role="status" aria-live="polite"></p><section id="dashboard" class="business-tab"><h1>Business Overview</h1><p>Paid orders, active projects, production and customer activity.</p><div class="actions"><button type="button" data-go="orders">Open orders</button><button type="button" data-go="projects" class="secondary">Review requests</button><button type="button" data-go="inventory" class="secondary">Check stock</button><button type="button" id="refresh-dashboard" class="secondary">Refresh overview</button></div><div id="dashboard-content"></div></section>
+<section id="projects" class="business-tab" hidden><h1>Custom Projects &amp; Quotes</h1><p>Customer requests, artwork, product previews, approvals and payment.</p><div class="toolbar"><label>Search<input id="project-search" type="search" placeholder="Customer, company or request"></label><label>Status<select id="project-filter"><option value="">Show all</option><option value="REQUESTED">Requested</option><option value="DESIGNING">Designing</option><option value="DRAFT">Draft</option><option value="REVIEW">In review</option><option value="CHANGES_REQUESTED">Changes Requested</option><option value="APPROVED">Approved</option><option value="PAID">Paid</option></select></label><span id="projects-count" class="result-count"></span></div><button id="refresh-projects">Refresh requests</button><div id="project-list"></div><div id="project-editor" hidden></div><button id="close-project" type="button" class="secondary" hidden>Close project editor</button></section>
+<section id="shops" class="business-tab" hidden><h1>Private Group Shops</h1><p>Share approved collections with a company, team or league.</p><div class="toolbar"><label>Search<input id="shop-search" type="search" placeholder="Shop name"></label><label>Status<select id="shop-filter"><option value="">Show all</option><option value="open">Open</option><option value="paused">Paused</option><option value="closed">Closed</option></select></label><span id="shops-count" class="result-count"></span></div><div id="shops-list"></div></section>
+<section id="catalog" class="business-tab" hidden><h1>Product Settings</h1><p>Square controls price and inventory. Hat Blanks are builder products; Hats are premade products. Enable builder eligibility on the blanks you want customers to customize.</p><div class="toolbar"><label>Search<input id="catalog-search" type="search" placeholder="Product name or category"></label><label>Category<select id="catalog-filter"><option value="">Show all</option><option value="Hats">Hats</option><option value="Hat Blanks">Hat Blanks</option><option value="Apparel">Apparel</option><option value="Patches">Patches</option><option value="3D">3D</option><option value="Other">Other</option><option>Blank Apparel</option></select></label><span id="catalog-count" class="result-count"></span></div><button id="refresh-catalog">Reload product settings</button><div id="catalog-list"></div><section class="card admin-section" id="flags-section">
         <div class="flags-header-row">
-          <h2>Product Flags</h2>
-          <button type="button" id="flags-toggle-btn" class="flags-toggle-btn">
-            Expand Products
-          </button>
-        </div>
+          <h2>Storefront Visibility &amp; Product Badges</h2>
+          </div>
 
         <p class="admin-help-text">
           Manage which designs are <strong>Pinned to the top</strong>, hidden
@@ -166,19 +15,17 @@
           which ribbon/tag appears on the product card (New, Featured, Custom).
         </p>
 
-        <p id="products-status" class="admin-status"></p>
+        <!-- FIX: admin.js looks for flags-status OR products-status.
+             Keep both IDs so nothing breaks. -->
+        <p id="flags-status" class="admin-status"></p>
+        <p id="products-status" class="admin-status" style="display:none"></p>
 
         <div class="flags-body">
           <!-- Product Flags search / filter controls -->
           <div class="flags-controls">
-            <input
-              type="text"
-              id="flags-search"
-              class="admin-input"
-              placeholder="Search by name, subcategory…"
-            />
+            <input type="text" id="flags-search" class="admin-input" placeholder="Search by name, subcategory…" aria-label="Search visibility settings">
 
-            <select id="flags-filter-subcat" class="admin-input">
+            <select id="flags-filter-subcat" class="admin-input" aria-label="Filter visibility settings by subcategory">
               <option value="">All subcategories</option>
               <!-- options filled by JS -->
             </select>
@@ -209,13 +56,148 @@
             <button id="save-flags-btn" type="button" class="btn-primary">
               Save Product Flags
             </button>
-            <span id="flags-status" class="admin-status"></span>
+            <!-- keep this span for layout; JS uses #flags-status above -->
+            <span class="admin-status"></span>
           </div>
         </div>
       </section>
 
-      <!-- Catalog & Inventory Sync -->
-      <section class="card admin-section" id="sync-section">
+      </section>
+<section id="settings" class="business-tab" hidden><h1>Business Settings</h1><p class="section-intro">Contact information, fulfillment defaults, fees, and tax settings.</p><form id="settings-form" class="panel"><div class="field-grid">
+<label>Business name<input name="businessName" required></label><label>Customer contact email<input name="contactEmail" type="email" required></label><label>Notification email<input name="notificationEmail" type="email" required></label><label>Typical production days<input name="productionDays" type="number" min="1" max="365" required></label><label>Quote expiry days<input name="quoteExpiryDays" type="number" min="1" max="365" required></label><label>Convenience fee %<input name="convenienceFeePercent" type="number" min="0" max="25" step=".01"></label><label>Sales tax %<input name="salesTaxPercent" type="number" min="0" max="25" step=".01"></label><label>Tax state<input name="taxState" maxlength="2"></label>
+<label class="check"><input name="localPickupEnabled" type="checkbox">Offer local pickup</label></div><button type="submit">Save business settings</button></form></section>
+<section id="mail" class="business-tab" hidden><h1>Email Delivery</h1><p>Review recent outgoing messages and retry failed deliveries. SMTP setup is controlled by your server settings.</p><p id="mail-operating-status" class="notice" role="status" aria-live="polite">Checking email sending status…</p><p class="admin-help-text">Accepted by the mail server does not confirm inbox delivery. Customers may need to check Junk or Spam.</p><div class="toolbar"><label>Status<select id="mail-filter"><option value="">All messages</option><option value="PENDING">Pending</option><option value="FAILED">Failed / needs attention</option><option value="SENT">Accepted by mail server</option></select></label><button type="button" id="refresh-mail">Refresh delivery status</button><span id="mail-count" class="result-count"></span></div><div id="mail-list"></div><section class="panel"><h2>Back-in-stock Notifications</h2><p>Customers subscribe to an exact hat color or patch color. Alerts queue once when that option becomes available. Delivery uses the same email setup as other customer messages.</p><div id="stock-alert-list"></div></section></section><section id="orders" class="business-tab" hidden><h1>Orders &amp; Production</h1><p class="section-intro">Review orders, update fulfillment, and print packing slips. Archived orders remain in your records.</p><p class="notice">Saving a change to In Production, Ready, Shipped, or Cancelled queues a customer update email. Enter tracking before saving a shipped order. Payment and refund states are read-only and require Square confirmation. Cancelling an order does not refund its payment.</p><div class="toolbar"><label>Search orders<input id="order-search" type="search" placeholder="Order number, customer or email"></label><label>Status<select id="order-filter"><option value="">All statuses</option><option value="PENDING">Pending</option><option value="PAID">Awaiting fulfillment</option><option value="IN_PRODUCTION">In Production</option><option value="READY">Ready</option><option value="SHIPPED">Shipped</option><option value="CANCELLED">Cancelled</option><option value="REFUNDED">Refunded</option><option value="AWAITING_PROOF">Awaiting Proof Approval</option></select></label><span id="order-count" class="result-count"></span></div><section class="card admin-section" id="orders-section">
+        <div class="flags-header-row">
+          <h2>Recent Orders</h2>
+          </div>
+
+        <p class="admin-help-text">
+          Quick view of recent orders created from your website checkout. You can
+          update status, add tracking, and mark an order as
+          <strong>ARCHIVED</strong> once it’s completed. Archived orders are removed
+          from this list and moved into the downloadable archive.
+        </p>
+
+        <div class="orders-body">
+          <div class="admin-orders-controls">
+            <button id="refresh-orders" class="btn-secondary" type="button">
+              Refresh Orders
+            </button>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="admin-table" id="orders-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Customer</th>
+                  <th>Total / payment</th>
+                  <th>Fulfillment</th>
+                  <th>Tracking #</th>
+                  <th>Packing List</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="orders-tbody">
+                <tr>
+                  <td colspan="7">Loading orders…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="card admin-section">
+        <h2>Archived Order Export</h2>
+        <p class="admin-help-text">Download a ZIP of orders marked Archived. Downloading keeps all order records on the server.</p><button id="archive-current-month" class="btn-secondary" type="button">
+          Download Orders Archive
+        </button>
+
+        <p id="archive-status" class="admin-status"></p>
+      </section>
+    <dialog id="order-detail-dialog"><div class="dialog-heading"><h2>Order details</h2><button type="button" id="order-detail-close" class="secondary">Close</button></div><div id="order-detail-content"></div></dialog></section><section id="patches" class="business-tab" hidden><h1>Patches &amp; Categories</h1><p class="section-intro">Manage patch artwork, categories, dimensions, and customer pricing in one place. Each patch can use your defaults or its own price and attachment charge.</p><div class="actions"><button type="button" data-patch-panel="patch-upload-panel">Add a patch</button><button type="button" data-patch-panel="patch-categories-panel" class="secondary">Manage categories</button></div><section class="panel" id="patch-material-manager"><h2>Patch Material Manager</h2><p>Manage your shared material stock here. Every patch color assigned to a material follows its stock status automatically. Photos and price overrides stay with each patch option.</p><form id="material-add-form"><div class="field-grid"><label>Color / engraving<input name="name" required maxlength="100" placeholder="Brown / Black"></label><label>Material / type<input name="type" maxlength="100" placeholder="Leatherette"></label><label>Stock status<select name="stockStatus"><option value="in-stock">In stock</option><option value="low-stock">Low stock</option><option value="out-of-stock">Out of stock</option></select></label></div><button type="submit">Add Material</button></form><div id="material-list"></div><p id="material-status" role="status" aria-live="polite"></p></section><form id="builder-settings-form" class="panel patch-defaults"><h2>Default Patch &amp; Attachment Pricing</h2><p>These defaults apply to patches whose price fields are blank. Changing a default updates those patches automatically; individually entered prices stay fixed.</p><div class="field-grid"><label class="check"><input name="builderPricingEnabled" type="checkbox">Enable paid Build Your Hat</label><label>Default customer patch price ($)<input name="builderPatchPrice" type="number" min="0" step=".01" placeholder="Enter your price"></label><label>Default attachment charge ($)<input name="assemblyFee" type="number" min="0" step=".01" placeholder="Enter your charge"></label>
+</div><button type="submit">Save pricing defaults</button></form><section class="panel" id="patches-section"><div class="">
+      <h3>Existing Patches</h3>
+
+      <p class="admin-help-text small">
+        Edit the name or physical dimensions of an existing patch without
+        re-uploading it. You can also replace its artwork while keeping the
+        same patch record.
+      </p>
+
+      <p class="admin-help-text small">
+        <strong>Preview Adjustment</strong> will let you fine-tune how the
+        artwork sits on the hat without changing its actual physical
+        measurements.
+      </p>
+
+      <div class="toolbar"><label>Search patches<input id="patch-admin-search" type="search" placeholder="Patch name"></label><label>Category<select id="patch-admin-category"><option value="">All categories</option><option value="__uncategorized">Uncategorized</option></select></label><label>Visibility<select id="patch-admin-active"><option value="">All patches</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label><span id="patch-admin-count" class="result-count"></span></div><div id="patches-list" class="patches-list"></div>
+
+      <p id="patches-status" class="admin-status"></p>
+    </div>
+  </section><details class="panel workspace-details" id="patch-categories-panel"><summary>Manage categories <span>Add or delete categories</span></summary><div class="details-content"><h3>Patch Categories</h3>
+      <p class="admin-help-text">A patch can belong to several categories. Designs without categories still appear in Browse All.</p>
+      <label for="patch-category-name">New category</label>
+      <input id="patch-category-name" class="admin-input" maxlength="60" placeholder="Example: Coastal">
+      <button id="patch-category-add" type="button" class="admin-button">Add Category</button>
+      <div class="category-manager"><h3>Delete a Category</h3><p>Removes the category from every patch. Patch artwork, prices, and other categories are kept.</p><label>Category to delete<select id="patch-category-delete-select"><option value="">Choose a category</option></select></label><button id="patch-category-delete" type="button" class="danger">Delete Category</button><p id="patch-category-status" role="status" aria-live="polite"></p></div></div></details><details class="panel workspace-details" id="patch-upload-panel"><summary>Add a new patch <span>Upload artwork and set its size</span></summary><div class="details-content"><h3>Add New Patch</h3>
+
+      <form id="patch-upload-form" class="admin-form" enctype="multipart/form-data">
+        <fieldset id="patch-new-categories"><legend>Patch Categories — choose any that apply</legend></fieldset>
+        <fieldset class="patch-pricing-fields"><legend>Customer Pricing</legend><div class="field-grid"><label>Customer patch price ($)<input id="patchCustomerPrice" type="number" min="0" max="1000" step="0.01" placeholder="Use default patch price"></label><label>Attachment charge ($)<input id="patchAttachmentFee" type="number" min="0" max="1000" step="0.01" placeholder="Use default attachment charge"></label></div><p class="admin-help-text">Leave blank to use the defaults. Enter 0 for no charge.</p></fieldset><label class="admin-label" for="patchName">
+          Patch Name
+        </label>
+
+        <input id="patchName" type="text" class="admin-input" placeholder="Example: Brackish Roots Logo Patch" required>
+
+        <div style="
+            display:grid;
+            grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+            gap:1rem;
+          ">
+          <div>
+            <label class="admin-label" for="patchWidth">
+              Actual Width (inches)
+            </label>
+
+            <input id="patchWidth" type="number" class="admin-input" min="0.25" max="10" step="0.01" value="3.00" placeholder="3.00" required>
+          </div>
+
+          <div>
+            <label class="admin-label" for="patchHeight">
+              Actual Height (inches)
+            </label>
+
+            <input id="patchHeight" type="number" class="admin-input" min="0.25" max="10" step="0.01" value="2.00" placeholder="2.00" required>
+          </div>
+        </div>
+
+        <p class="admin-help-text small">
+          For an irregular shape, measure the maximum overall width and
+          maximum overall height.
+        </p>
+
+        <label class="admin-label" for="patchImage">
+          Patch Image (PNG/JPG/WebP)
+        </label>
+
+        <input id="patchImage" type="file" class="admin-input" accept="image/png,image/jpeg,image/webp,image/gif" required>
+
+        <label class="admin-checkbox">
+          <input type="checkbox" id="patchActive" checked>
+          <span>
+            Active — show this patch to customers
+          </span>
+        </label>
+
+        <button type="submit" class="btn-primary">
+          Upload Patch
+        </button>
+
+        <p id="patch-upload-status" class="admin-status"></p>
+      </form>
+    </div></details></section><section id="inventory" class="business-tab" hidden><h1>Inventory &amp; Labels</h1><p class="section-intro">Check Square stock, scan items, apply quantity adjustments, and print labels.</p><section class="card admin-section" id="sync-section">
         <h2>Catalog &amp; Inventory Sync</h2>
         <p class="admin-help-text">
           If products look out of date after adding or editing items in Square,
@@ -235,56 +217,39 @@
         <p id="sync-status" class="admin-status"></p>
       </section>
 
-      <!-- Inventory Management (Barcode + Scan to Count) -->
-      <section class="card admin-section" id="barcode-section">
+<section class="card admin-section" id="barcode-section">
         <!-- Header row: title left, pill button right -->
         <div class="flags-header-row">
           <h2>Inventory Management</h2>
-          <button
-            type="button"
-            id="barcode-toggle-btn"
-            class="flags-toggle-btn"
-          >
-            Expand Inventory
-          </button>
-        </div>
+          </div>
 
         <!-- Description ALWAYS visible -->
         <p class="admin-help-text">
-          Search for products, record your counted quantities, print fresh
-          barcode labels, and send your +/- adjustments straight back to
-          Square so everything stays in sync.
-          <br />
-          <strong>Tip:</strong> Use the scan-to-count box below with your
-          Bluetooth barcode scanner. Each scan will add +1 to the
-          <strong>Counted qty</strong> for that SKU.
+          Search for products, record your counted quantities, print fresh barcode
+          labels, and send your +/- adjustments straight back to Square so
+          everything stays in sync.
+          <br>
+          <strong>Tip:</strong> Use the scan-to-count box below with your Bluetooth
+          barcode scanner. Each scan will add +1 to the
+          <strong>Stock change</strong> for that SKU.
         </p>
 
         <!-- Collapsible body -->
         <div class="barcode-body">
           <div class="barcode-controls">
-            <input
-              type="text"
-              id="barcode-search"
-              class="admin-input"
-              placeholder="Search by name, SKU, color, size…"
-            />
+            <input type="text" id="barcode-search" class="admin-input" placeholder="Search by name, SKU, color, size…" aria-label="Search inventory">
 
-            <select id="barcode-filter-subcat" class="admin-input">
+            <select id="barcode-filter-subcat" class="admin-input" aria-label="Filter inventory by subcategory">
               <option value="">All subcategories</option>
               <!-- options filled by JS -->
             </select>
 
             <label class="admin-checkbox">
-              <input type="checkbox" id="barcode-show-zero" />
+              <input type="checkbox" id="barcode-show-zero">
               <span>Show zero-stock variants</span>
             </label>
 
-            <button
-              type="button"
-              id="barcode-refresh-btn"
-              class="btn-secondary"
-            >
+            <button type="button" id="barcode-refresh-btn" class="btn-secondary">
               Refresh from Square
             </button>
           </div>
@@ -295,139 +260,132 @@
               Scan-to-count box (Bluetooth scanner)
             </label>
 
-            <input
-              type="text"
-              id="barcode-scan-input"
-              class="admin-input scan-buffer-input"
-              autocomplete="off"
-              placeholder="Click here once, then just start scanning…"
-            />
+            <input type="text" id="barcode-scan-input" class="admin-input scan-buffer-input" autocomplete="off" placeholder="Click here once, then just start scanning…">
 
-            <p id="scan-status" class="admin-status small"></p>
+            <!-- FIX: admin.js uses #barcode-status for scan messages (not #scan-status).
+                 Keep scan-status if you want, but barcode-status is the one JS updates. -->
+            <p id="scan-status" class="admin-status small" style="display:none"></p>
           </div>
 
-          <p id="barcode-info" class="admin-help-text small">
-            To print labels, check the rows you want under <strong>Select</strong>
+          <p id="barcode-info" class="admin-help-text small">Stock change is an adjustment: + adds stock and − removes stock. Each scan adds +1. Selections and label quantities are kept while searching. To print labels, <strong>Select</strong>
             and set a number under <strong>Labels to print</strong>. Scan-to-count
-            only affects the <strong>Counted qty</strong> column.
+            only affects the <strong>Stock change</strong> column.
           </p>
 
-          <!-- JS will render:
-               - current qty
-               - counted qty
-               - labels to print
-          -->
           <div id="barcode-products-container"></div>
 
           <div class="barcode-actions-row">
-            <button
-              type="button"
-              id="barcode-print-selected-btn"
-              class="btn-primary"
-            >
-              Print selected labels
+            <label>Label output<select id="label-output"><option value="print">Connected label printer</option><option value="pdf">Download PDF</option></select></label><button type="button" id="barcode-print-selected-btn" class="btn-primary">
+              Create selected labels
             </button>
 
-            <!-- Send counts to Square -->
-            <button
-              type="button"
-              id="barcode-apply-inventory-btn"
-              class="btn-secondary"
-            >
-              Send counts to Square
+            <button type="button" id="barcode-apply-inventory-btn" class="btn-secondary">
+              Apply stock changes
             </button>
 
-            <!-- Output options -->
             <label class="admin-checkbox barcode-print-option">
-              <input type="checkbox" id="barcode-print-to-label" checked />
+              <input type="checkbox" id="barcode-print-to-label" checked>
               <span>Print to label printer</span>
             </label>
 
-            <!-- (Optional future) PDF checkbox, referenced in JS but not required -->
-            <!--
-            <label class="admin-checkbox barcode-print-option">
-              <input type="checkbox" id="barcode-download-pdf" />
-              <span>Download PDF instead</span>
-            </label>
-            -->
+            <!-- FIX: admin.js references this element even if you don't use it -->
+            <input type="checkbox" id="barcode-download-pdf" style="display:none">
 
             <span id="barcode-status" class="admin-status"></span>
           </div>
         </div>
       </section>
 
-      <!-- Orders Card (collapsible) -->
-      <section class="card admin-section" id="orders-section">
-        <!-- Header row: title left, pill button right -->
-        <div class="flags-header-row">
-          <h2>Recent Orders</h2>
-          <button
-            type="button"
-            id="orders-toggle-btn"
-            class="flags-toggle-btn"
-          >
-            Expand Orders
-          </button>
-        </div>
-
-        <!-- Description ALWAYS visible -->
+      <p class="notice">For a physical stocktake, calculate counted stock minus current Square stock and enter that adjustment. Review the confirmation before applying it.</p></section><section id="storefront" class="business-tab" hidden><h1>Storefront Settings</h1><p class="section-intro">Control announcements, shop availability, and shipping prices for the public shop.</p><section class="card admin-section">
+        <h2>Announcements, Popup &amp; Shipping</h2>
         <p class="admin-help-text">
-          Quick view of recent orders created from your website checkout. You
-          can update status, add tracking, and mark an order as
-          <strong>ARCHIVED</strong> once it’s completed. Archived orders are
-          removed from this list and moved into the downloadable archive.
+          Update the message that appears at the top of the customer site.
         </p>
 
-        <!-- Collapsible body -->
-        <div class="orders-body">
-          <div class="admin-orders-controls">
-            <button id="refresh-orders" class="btn-secondary">
-              Refresh Orders
-            </button>
-          </div>
+        <form id="banner-form" class="admin-form">
+          <label class="admin-label" for="bannerText"> Banner Text </label>
+          <textarea id="bannerText" name="bannerText" rows="3" class="admin-input" placeholder="Example: We’re at the Christmas Market this weekend! Orders ship on Monday."></textarea>
 
-          <div class="table-wrapper">
-            <table class="admin-table" id="orders-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Customer</th>
-                  <th>Total</th>
-                  <th>Status</th>
-                  <th>Tracking #</th>
-                  <th>Packing List</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="orders-tbody">
-                <tr>
-                  <td colspan="7">Loading orders…</td>
-                </tr>
-              </tbody>
-            </table>
+          <label class="admin-checkbox">
+            <input type="checkbox" id="bannerVisible" name="bannerVisible">
+            <span>Show banner on site</span>
+          </label>
+
+          <p id="banner-status" class="admin-status"></p>
+        <div class="admin-subsection">
+          <h3>Shop Splash / Popup</h3>
+          <p class="admin-help-text">
+            Use this popup to temporarily close the online shop during events or
+            while you are updating inventory. This will show a full-screen splash
+            on the home/shop page (styled like the kiosk splash).
+          </p>
+
+          <div class="admin-form">
+            <label class="admin-checkbox">
+              <input type="checkbox" id="popupEnabled">
+              <span>Enable shop splash popup</span>
+            </label>
+
+            <label class="admin-label" for="popupMode"> Popup Mode </label>
+            <select id="popupMode" class="admin-input">
+              <option value="none">None</option>
+              <option value="event">Closed for Event</option>
+              <option value="inventory">Updating Inventory</option>
+              <option value="custom">Custom Message</option>
+            </select>
+
+            <label class="admin-label" for="popupCustomText">
+              Custom Popup Message
+            </label>
+            <textarea id="popupCustomText" rows="3" class="admin-input" placeholder="Example: Hey loyal customers! We’re currently at an event today, and to avoid selling the same item in-person and online, the online shop is temporarily closed. It’ll reopen once the event wraps up – thank you for your understanding!"></textarea>
+
+            <p id="popup-status" class="admin-status"></p>
           </div>
         </div>
-      </section>
 
-      <!-- Order Archive Download Section -->
-      <section class="card admin-section">
-        <h2>Order Archive Download</h2>
-        <p class="admin-help-text">
-          When you mark orders as <strong>ARCHIVED</strong>, they are moved into
-          an archive folder on the server. Use this button to download a ZIP
-          file containing all archived orders and permanently clear them from
-          the online server to save space.
-        </p>
+        <div class="admin-subsection">
+          <h3>Shipping Settings</h3>
+          <p class="admin-help-text">
+            These values control the shipping line added at checkout. The flat
+            rate is charged on orders below the free shipping threshold; orders
+            at or above the threshold get free shipping.
+            <br>
+            Be sure this threshold matches your free-shipping rules in Square.
+          </p>
 
-        <button id="archive-current-month" class="btn-secondary">
-          Download Orders Archive
-        </button>
+          <div class="admin-form">
+            <label class="admin-label" for="shippingFlatRate">
+              Flat-Rate Shipping ($)
+            </label>
+            <input id="shippingFlatRate" type="number" step="0.01" min="0" class="admin-input" placeholder="Example: 7.99">
 
-        <p id="archive-status" class="admin-status"></p>
-      </section>
-    </main>
+            <label class="admin-label" for="freeShippingThreshold">
+              Free Shipping Threshold ($)
+            </label>
+            <input id="freeShippingThreshold" type="number" step="0.01" min="0" class="admin-input" placeholder="Example: 75.00">
 
-    <script src="config-admin.js"></script>
-    <script src="admin.js"></script>
-  </body>
-</html>
+            <p id="shipping-status" class="admin-status"></p>
+          </div>
+        </div>
+      <button type="submit" class="btn-primary">Save storefront settings</button>
+
+          </form>
+
+        <!-- Session timeout -->
+        <!-- Shop Splash / Popup Controls -->
+        <!-- Shipping Settings -->
+        </section>
+
+      </section><section id="analytics" class="business-tab" hidden><h1>Analytics</h1><p class="section-intro">Visitor totals include people who consent to tracking. Staff and private artwork review pages are excluded.</p><form id="analytics-form" class="panel"><h2>Tracking Settings</h2><div class="field-grid"><label class="check"><input name="analyticsEnabled" type="checkbox">Enable consent-based visitor tracking</label><label>Google Analytics measurement ID<input name="gaMeasurementId" placeholder="G-XXXXXXXX"></label><label>Clarity project ID<input name="clarityProjectId"></label></div><button type="submit">Save analytics settings</button></form><div id="analytics-content"></div></section><section id="backups" class="business-tab" hidden><h1>Backups &amp; Session</h1><p class="section-intro">Download a full backup before major changes. Store the backup in a secure place you control.</p><div class="panel"><h2>Full Business Backup</h2><p>Includes business records, settings, and uploaded files. Downloading does not change your live data.</p><button id="backup" type="button">Download Full Data Backup</button><p id="backup-status" role="status"></p></div><section class="panel">
+          <h2>Session Timeout</h2>
+
+          <label class="admin-checkbox">
+            <input type="checkbox" id="extend-timeout-toggle">
+            <span>
+              Keep me logged in longer while doing inventory / barcode work
+              (4-hour timeout)
+            </span>
+          </label>
+        </section>
+
+        </section><section id="apparel-designs" class="business-tab" hidden><h1>Apparel Designs</h1><p>Manage design categories, print charges, personalization, and incompatible colors from Square Blank Apparel.</p><p id="apparel-admin-status" role="status"></p><div id="apparel-design-admin"></div></section><section id="paid-proofs" class="business-tab" hidden><h1>Paid Personalization Proofs</h1><p>These orders are already paid. Send the finished personalized proof for approval. Every personalized item must be approved before production or shipping.</p><button id="refresh-paid-proofs" type="button">Refresh Paid Proofs</button><div id="paid-proof-list"></div></section><section id="custom-options" class="business-tab" hidden><h1>Custom Order Options</h1><p>Square products, colors and sizes offered for custom quote requests.</p><div id="custom-order-admin"></div></section><section id="sourcing" class="business-tab" hidden><h1>Job Supplies &amp; Sourcing</h1><p>Assign supplies manually to a custom project or paid custom/group order. Split the same product into stock and on-order lines when needed.</p><p id="sourcing-environment" class="notice"></p><p>Stock pulls deduct the selected Square variations immediately when submitted. This records inventory use only; it does not charge the customer. Review project and order history to avoid allocating the same supplies twice. Square catalog checkout items use their normal inventory flow.</p><p>On order is a tracking record, not a supplier purchase. When supplies arrive, receive stock in Square first, then submit a stock pull if needed. Marking a line received here does not change Square inventory. Patch materials without a Square item can be described as on-order/manual notes; local patch availability flags stay manual.</p><button id="refresh-sourcing" type="button">Refresh sourcing history</button><form id="sourcing-form" class="panel"><label>Job<select id="sourcing-target" required></select></label><div id="sourcing-rows"></div><button id="add-sourcing-line" type="button" class="secondary">Add supply line</button><label class="check"><input id="sourcing-confirm" type="checkbox" required>I reviewed the job, exact variations and quantities. Submit stock lines to Square now; record on-order lines without a deduction.</label><button type="submit">Submit sourcing</button></form><p id="sourcing-status" role="status" aria-live="polite"></p><h2>Sourcing history — latest 200 submissions</h2><div id="sourcing-history"></div></section></main></div><script src="config-admin.js"></script><script src="admin-session.js"></script><script src="admin.js"></script><script src="/variation-options.js"></script><script src="hat-preview-tools.js"></script><script src="hat-preview-admin.js"></script><script src="custom-order-admin.js"></script><script src="quote-workflow.js"></script><script src="sourcing-admin.js"></script><script src="business-admin.js"></script><script src="apparel-placement.js"></script><script src="apparel-preview-admin.js"></script><script src="apparel-admin.js"></script><script src="/photo-watermarks.js"></script></body></html>
