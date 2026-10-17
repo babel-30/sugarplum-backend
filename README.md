@@ -14,13 +14,19 @@ needed for this deployment. The health check is `/health`.
 
 - Keep `SQUARE_ENVIRONMENT=sandbox`. Changing `NODE_ENV` to `production` enables
   hosted security settings; it does not select Square's payment environment.
-- Set `NODE_VERSION=24.11.1` and `NODE_ENV=production`.
+- The package engine is restricted to `24.x`; use `NODE_ENV=production`.
 - Attach a persistent disk at `/var/data`; set
   `DATA_DIR=/var/data/brackish-roots`.
 - Set `PUBLIC_SITE_URL` to the verified public HTTPS address.
 - Keep `MAIL_DISABLED=true` during migration and initial verification.
 - Supply existing Square, SMTP, admin, and session secrets through Render's
   private environment settings. Never commit them.
+- This sandbox deployment loads its private settings from
+  `/var/data/brackish-roots/runtime.env` using the start command
+  `node -r dotenv/config server.js dotenv_config_path=/var/data/brackish-roots/runtime.env dotenv_config_override=true`.
+  That file has private permissions and is excluded from Git. Leave `PORT` out of
+  it so Render retains control of the assigned port. Values in this file override
+  old service environment values; edit this file when updating sandbox secrets.
 - Configure the exact public Square webhook URL and its sandbox signature key
   before testing payment callbacks.
 
