@@ -18,6 +18,8 @@ let FREE_SHIPPING_THRESHOLD = 75; // free shipping when subtotal >= $75
 let CONVENIENCE_FEE_RATE = 0.03; // 3% card fee
 let TAX_STATE = "MS";
 let SALES_TAX_RATE = 0.07; // 7% sales tax estimate
+let cartSettingsStatus = 'loading';
+let cartSettingsRequest = null;
 
 // Global products array (filled from /products)
 let products = [];
@@ -414,6 +416,10 @@ function computeShipping(subtotal) {
 
 // ========== CHECKOUT HANDLER ==========
 async function handleCheckoutClick() {
+  if(typeof cartSettingsStatus!=='undefined'&&cartSettingsStatus!=='ready'){
+    await spcInitCartShipping();
+    return;
+  }
   if (!cart || !cart.length) {
     showSpcAlert("Your cart is empty.", "warning");
     return;
@@ -1086,6 +1092,17 @@ function updateCartDisplay() {
       const diff = FREE_SHIPPING_THRESHOLD - subtotal;
       freeShipBannerEl.textContent = `Add $${diff.toFixed(2)} more for FREE shipping.`;
     }
+  }
+
+  if(document.querySelector('.cart-page')){
+    const ready=cartSettingsStatus==='ready',failed=cartSettingsStatus==='error';
+    if(!ready){
+      for(const element of [cartShippingEl,cartFeeEl,cartTaxEl,cartGrandTotalEl])if(element)element.textContent='—';
+      if(freeShipBannerEl)freeShipBannerEl.textContent=failed?'Shipping rates could not be loaded. Please retry.':'Loading shipping and totals…';
+    }
+    const button=document.getElementById('checkout-btn'),status=document.getElementById('cart-rates-status');
+    if(button){button.disabled=cartSettingsStatus==='loading';button.textContent=failed?'Retry shipping settings':'Continue to checkout';}
+    if(status)status.textContent=ready?'Final availability and totals are confirmed at checkout.':failed?'We could not confirm shipping and totals. Select Retry shipping settings.':'Loading shipping and totals…';
   }
 
   renderCartDetails();
@@ -2567,16 +2584,22 @@ function spcRecalcCartShipping() {
 async function spcInitCartShipping() {
   const cartPage = document.querySelector(".cart-page");
   if (!cartPage) return;
+  if(cartSettingsRequest)return cartSettingsRequest;
+  cartSettingsStatus='loading';
+  updateCartDisplay();
+  cartSettingsRequest=(async()=>{
 
   try {
-    const res = await fetch(`${API_BASE}/store/config`);
+    const res = await fetch(`${API_BASE}/store/config`,{signal:AbortSignal.timeout(15000)});
+    if(!res.ok)throw new Error('Shipping settings unavailable');
     if (res.ok) {
       const data = await res.json();
+      if(!['shippingFlatRate','freeShippingThreshold','convenienceFeePercent','salesTaxPercent'].every(key=>data[key]!=null&&Number.isFinite(Number(data[key]))&&Number(data[key])>=0))throw new Error('Invalid shipping settings');
       CONVENIENCE_FEE_RATE = Number(data.convenienceFeePercent || 0)/100;
       SALES_TAX_RATE = Number(data.salesTaxPercent || 0)/100;
       TAX_STATE = data.taxState || "MS";
       const pickup = document.getElementById("pickup-option");if(pickup)pickup.hidden=!data.localPickupEnabled;
-      document.getElementById("checkout-pickup")?.addEventListener("change",updateCartDisplay);
+      const pickupInput=document.getElementById("checkout-pickup");if(pickupInput)pickupInput.onchange=updateCartDisplay;
 
       if (data.shippingFlatRate != null && !isNaN(data.shippingFlatRate)) {
         SHIPPING_FLAT_RATE = parseFloat(data.shippingFlatRate);
@@ -2584,12 +2607,16 @@ async function spcInitCartShipping() {
       if (data.freeShippingThreshold != null && !isNaN(data.freeShippingThreshold)) {
         FREE_SHIPPING_THRESHOLD = parseFloat(data.freeShippingThreshold);
       }
+      cartSettingsStatus='ready';
     }
   } catch (err) {
+    cartSettingsStatus='error';
     console.error("Failed to load shipping settings for cart:", err);
   }
 
   spcRecalcCartShipping();
+  })();
+  try{await cartSettingsRequest;}finally{cartSettingsRequest=null;}
 }
 
 document.addEventListener("DOMContentLoaded", spcInitCartShipping);

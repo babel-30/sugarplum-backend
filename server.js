@@ -3139,6 +3139,7 @@ function generateBarcodePng(text) {
 }
 
 const packingImages=require('./lib/packing-images');
+const projectPackingImage=require('./lib/project-packing-image');
 async function generatePackingSlipPDF(row, items, shipping, res) {
   if (!PDFDocument)
     throw new Error("PDF generation is not available (PDFDocument is null).");
@@ -3218,7 +3219,8 @@ async function generatePackingSlipPDF(row, items, shipping, res) {
     if(y+rowHeight>doc.page.height-65){doc.addPage();doc.fontSize(10).text(`Order #${row.id} - continued`,40,40,{width:500});doc.moveDown(.7);y=header();}
     const product=(cachedBaseProducts||cachedCatalog||[]).find(p=>p.id===item.id),variation=(product?.variations||product?.squareVariations||[]).find(v=>v.id===(item.catalogObjectId||item.squareVariationId));
     const patch=custom&&patchesConfig.patches.find(p=>p.id===custom.patchId),p=packingImages.preview(item,patch,variation,product);
-    let photo;try{photo=item.customApparel?await packingImages.apparelThumbnail(item,imageLoader,item.customApparel.selections[0].side):await packingImages.thumbnail(item,p,imageLoader);}catch{}
+    let photo=await projectPackingImage(db,item,shipping);
+    if(!photo)try{photo=item.customApparel?await packingImages.apparelThumbnail(item,imageLoader,item.customApparel.selections[0].side):await packingImages.thumbnail(item,p,imageLoader);}catch{}
     if(approvedProof?.status==='APPROVED'){try{const file=JSON.parse(approvedProof.files_json)[0];if(file)photo=await require('sharp')(path.join(db.dataDir,'paid-proofs',file.filename)).rotate().png().toBuffer();}catch{}}
     if(photo)photo=await photoWatermarks.stamp(photo);
     if(photo)doc.image(photo,40,y,{fit:[78,78],align:'center',valign:'center'});
