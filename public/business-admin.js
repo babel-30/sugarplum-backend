@@ -11,11 +11,13 @@ function mailOperatingLabel(state){if(state.paused)return state.configured?'Paus
 const legacyTabs=new Set(['orders','inventory','storefront']);
 async function legacyLoad(id){if(!window.BrackishAdminTools)await new Promise(resolve=>window.addEventListener('br-admin-tools-ready',resolve,{once:true}));await window.BrackishAdminTools[id]?.();}
 async function selectTab(id,force=false){
-  if(!$(id)?.classList.contains('business-tab'))id='dashboard';activeTab=id;
+  if(!$(id)?.classList.contains('business-tab'))id='dashboard';const switching=activeTab!==id;activeTab=id;
   document.querySelectorAll('.business-tab').forEach(section=>section.hidden=section.id!==id);
   document.querySelectorAll('[data-tab]').forEach(button=>{button.classList.toggle('active',button.dataset.tab===id);if(button.dataset.tab===id)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
   if(location.hash!=='#'+id)history.replaceState(null,'','#'+id);window.scrollTo({top:0,behavior:'instant'});
-  show('');if(loadedTabs.has(id)&&!force)return;
+  const unsavedOrders=Array.from(document.querySelectorAll('#orders-tbody .order-tracking-input')).some(input=>input.value!==input.defaultValue)||Array.from(document.querySelectorAll('#orders-tbody .order-status-input')).some(select=>select.value!==Array.from(select.options).find(option=>option.defaultSelected)?.value);
+  const refreshWorkList=switching&&(['projects','mail'].includes(id)||id==='orders'&&!unsavedOrders);
+  show('');if(loadedTabs.has(id)&&!force&&!refreshWorkList)return;
   const loaders={sourcing:()=>window.BrackishSourcingAdmin.load(),'custom-options':()=>window.BrackishCustomOrderAdmin.load(),'apparel-designs':()=>window.BrackishApparelAdmin.loadDesigns(),'paid-proofs':()=>window.BrackishApparelAdmin.loadProofs(),dashboard:loadDashboard,projects:loadProjects,shops:loadShops,catalog:async()=>{await loadCatalog();await legacyLoad('catalog');},patches:async()=>{await legacyLoad('patches');await loadSettings();},settings:loadSettings,analytics:async()=>{await loadSettings();await loadAnalytics();},mail:loadMail};
   show('Loading…');try{if(legacyTabs.has(id))await legacyLoad(id);else await loaders[id]?.();loadedTabs.add(id);show('');}catch(e){show(e.message,'error');throw e;}
 }

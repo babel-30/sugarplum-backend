@@ -2101,6 +2101,7 @@ const variationImages = variationImageIds
         size: namedOptions.size||parsed.size,
         color: namedOptions.color||parsed.color,
         sku,
+        inventoryTracked: (vData.locationOverrides||[]).find(o=>o.locationId===process.env.SQUARE_LOCATION_ID)?.trackInventory ?? vData.trackInventory===true,
 printLocation: namedOptions.printLocation||printLocation,
 image: variationImages[0] || imageUrl || null,
 images:
