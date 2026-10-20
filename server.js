@@ -1868,7 +1868,12 @@ let lastInventoryFetch = 0;
 const PRINT_LOCATION_CA_KEY = "print_location";
 
 // ----- Refresh catalog from Square -----
-async function refreshCatalogFromSquare() {
+let catalogRefreshInFlight=null;
+async function refreshCatalogFromSquare(){
+  if(!catalogRefreshInFlight)catalogRefreshInFlight=refreshCatalogFromSquareImpl().finally(()=>{catalogRefreshInFlight=null;});
+  return catalogRefreshInFlight;
+}
+async function refreshCatalogFromSquareImpl() {
   console.log("Refreshing catalog from Square (full catalog fetch)...");
   const catalogApi = squareClient.catalogApi;
 
@@ -1877,7 +1882,7 @@ async function refreshCatalogFromSquare() {
 
   do {
     // legacy SDK supports listCatalog(cursor) in your current setup
-    const resp = await catalogApi.listCatalog(cursor);
+    const resp = await catalogApi.listCatalog(cursor,"ITEM,CATEGORY,ITEM_OPTION,IMAGE");
     const objs = resp?.result?.objects || [];
     if (objs.length) allObjects.push(...objs);
     cursor = resp?.result?.cursor;
@@ -1925,6 +1930,10 @@ const referencedVariationImageIds = [];
 
 for (const obj of allObjects) {
   if (obj?.type !== "ITEM") continue;
+
+  for(const id of obj.itemData?.imageIds||[]){
+    if(id&&!referencedVariationImageIds.includes(id))referencedVariationImageIds.push(id);
+  }
 
   const variations = obj.itemData?.variations || [];
 
@@ -2029,14 +2038,14 @@ if (missingVariationImageIds.length > 0) {
     }
 
     // Resolve image
-    let imageUrl = data.imageUrl || null;
+    let imageUrl = data.imageUrl || (data.imageIds||[]).map(id=>imageIdToUrl[id]).find(Boolean) || null;
 
     if (!imageUrl && Array.isArray(data.imageIds) && data.imageIds.length > 0) {
       const imgId = data.imageIds[0];
       try {
         const imgResp = await catalogApi.retrieveCatalogObject(imgId);
         const imgObj = imgResp?.result?.object;
-        if (imgObj?.imageData?.url) imageUrl = imgObj.imageData.url;
+        if (imgObj?.imageData?.url) imageUrl = imageIdToUrl[imgId] = imgObj.imageData.url;
       } catch (err) {
         logError(
           "Error retrieving image object for",
