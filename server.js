@@ -2294,16 +2294,8 @@ app.get("/products", async (req, res) => {
       return { ...p, variations: normalizedVariations, builderEligible: !!p.builderEligible };
     });
 
-    // ✅ IMPORTANT: Keep 3D items even if Square inventory count is 0/missing
-    decorated = decorated.filter((p) => {
-      const cat = String(p.category || "").trim().toUpperCase();
-
-      // 3D prints are commonly made-to-order or not tracked via inventory counts
-      if (p.fulfillmentMode === "made-to-order") return true;
-
-      // Otherwise require at least one in-stock variation
-      return (p.variations || []).some((v) => (v.quantity || 0) > 0);
-    });
+    // Keep sold-out listings visible for catalog review. The storefront disables
+    // unavailable selections, and checkout independently validates Square stock.
 
     // Sort pins/featured/new/name
     decorated.sort((a, b) => {
