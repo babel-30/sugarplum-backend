@@ -1558,7 +1558,7 @@ const initialDisplayImage =
         <img
          src="${initialDisplayImage}"
           alt="${p.name}"
-          class="product-img"
+          class="product-img" loading="lazy" decoding="async"
         />
       </div>
 
