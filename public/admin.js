@@ -2830,6 +2830,24 @@ document.addEventListener("DOMContentLoaded", () => {
   // =======================
   //  PRODUCTS / FLAGS UI
   // =======================
+  const selectedFlagProducts = new Set();
+  function updateFlagSelectionCount() { const el=document.getElementById('flags-selected-count'); if(el)el.textContent=selectedFlagProducts.size+' designs selected'; }
+  flagsTbody?.addEventListener('change', event=>{if(!event.target.matches('.flag-select'))return;const id=event.target.closest('tr').dataset.productId;event.target.checked?selectedFlagProducts.add(id):selectedFlagProducts.delete(id);updateFlagSelectionCount();});
+  document.getElementById('flags-scan')?.addEventListener('keydown', event=>{
+    if(event.key!=='Enter')return;event.preventDefault();const code=event.target.value.trim().toLowerCase();if(!code)return;
+    const matches=adminProducts.filter(p=>(p.barcodes||[]).some(v=>String(v).toLowerCase()===code));
+    if(matches.length===1){captureProductFlagEdits();selectedFlagProducts.add(matches[0].id);applyFlagsFiltersAndRender();updateFlagSelectionCount();showStatus(flagsStatusEl,'Selected '+matches[0].name+'. Scan the next shirt.',false);event.target.value='';}
+    else showStatus(flagsStatusEl,matches.length?'Barcode matches more than one design. Select the correct row manually.':'Barcode not found. Reload product settings and check the code.',true);
+  });
+  document.getElementById('flags-select-visible')?.addEventListener('click',()=>{flagsTbody.querySelectorAll('tr[data-product-id]').forEach(row=>selectedFlagProducts.add(row.dataset.productId));applyFlagsFiltersAndRender();updateFlagSelectionCount();});
+  document.getElementById('flags-clear-selection')?.addEventListener('click',()=>{selectedFlagProducts.clear();applyFlagsFiltersAndRender();updateFlagSelectionCount();});
+  document.getElementById('flags-batch-apply')?.addEventListener('click',()=>{
+    if(!selectedFlagProducts.size){showStatus(flagsStatusEl,'Select or scan at least one design first.',true);return;}
+    captureProductFlagEdits();const [flag,value]=document.getElementById('flags-batch-action').value.split(':');
+    adminProducts.filter(p=>selectedFlagProducts.has(p.id)).forEach(p=>{p.flags={...p.flags,[flag]:value==='true'};});
+    // Clear old rows so rendering cannot recapture their pre-batch values.
+    flagsTbody.innerHTML='';applyFlagsFiltersAndRender();showStatus(flagsStatusEl,'Updated '+selectedFlagProducts.size+' designs. Click Save Product Flags to save.',false);
+  });
   function renderProductsTable(products) {
     if (!flagsTbody) return;
 
@@ -2852,6 +2870,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         return `
   <tr data-product-id="${escapeHtml(p.id)}">
+    <td><input type="checkbox" class="flag-select" aria-label="Select ${escapeHtml(p.name)}" ${selectedFlagProducts.has(p.id)?"checked":""}></td>
     <td class="prod-name">${escapeHtml(p.name)}</td>
     <td class="prod-subcat">${escapeHtml(p.subcategory || "-")}</td>
     <td class="prod-inv">${totalInv}</td>
@@ -2917,7 +2936,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const name = (p.name || "").toLowerCase();
       const subcat = (p.subcategory || "").toLowerCase();
 
-      const matchesSearch = !query || name.includes(query) || subcat.includes(query);
+      const matchesSearch = !query || name.includes(query) || subcat.includes(query) || (p.barcodes||[]).some(code=>String(code).toLowerCase().includes(query));
       const matchesSubcat = !subcatFilter || (subcat && subcat === subcatFilter);
 
       return matchesSearch && matchesSubcat;

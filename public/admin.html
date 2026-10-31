@@ -23,7 +23,7 @@
         <div class="flags-body">
           <!-- Product Flags search / filter controls -->
           <div class="flags-controls">
-            <input type="text" id="flags-search" class="admin-input" placeholder="Search by name, subcategory…" aria-label="Search visibility settings">
+            <input type="text" id="flags-search" class="admin-input" placeholder="Search by name, category, SKU or barcode…" aria-label="Search visibility settings">
 
             <select id="flags-filter-subcat" class="admin-input" aria-label="Filter visibility settings by subcategory">
               <option value="">All subcategories</option>
@@ -31,11 +31,18 @@
             </select>
           </div>
 
-          <div class="table-wrapper products-table-wrapper">
+          <div class="toolbar">
+<label>Scan shirts to select designs<input id="flags-scan" placeholder="Scan barcode, then Enter" autocomplete="off"></label>
+<span id="flags-selected-count" role="status" aria-live="polite">0 designs selected</span>
+<button type="button" id="flags-select-visible">Select displayed</button><button type="button" id="flags-clear-selection">Clear selection</button>
+<select id="flags-batch-action" aria-label="Batch visibility action"><option value="hideOnline:true">Hide online</option><option value="hideOnline:false">Show online</option><option value="hideKiosk:true">Hide kiosk</option><option value="hideKiosk:false">Show kiosk</option><option value="pinToTop:true">Pin to top</option><option value="pinToTop:false">Unpin</option></select>
+<button type="button" id="flags-batch-apply">Apply to selected</button></div>
+<p>Scanning selects the whole design, including all sizes and colors. Batch edits are saved only when you click Save Product Flags. These controls do not change stock.</p>
+<div class="table-wrapper products-table-wrapper">
             <table class="admin-table product-flags-table">
               <thead>
                 <tr>
-                  <th>Name</th>
+                  <th>Select</th><th>Name</th>
                   <th>Subcategory</th>
                   <th>Total Inventory</th>
                   <th>Pin to top</th>

@@ -2093,6 +2093,7 @@ if (missingVariationImageIds.length > 0) {
       }
 
       const sku = vData.sku || null;
+      const barcode = vData.upc || null;
 
       const variationImageIds = Array.isArray(vData.imageIds)
   ? vData.imageIds.filter(Boolean)
@@ -2110,6 +2111,7 @@ const variationImages = variationImageIds
         size: namedOptions.size||parsed.size,
         color: namedOptions.color||parsed.color,
         sku,
+        barcode,
         inventoryTracked: (vData.locationOverrides||[]).find(o=>o.locationId===process.env.SQUARE_LOCATION_ID)?.trackInventory ?? vData.trackInventory===true,
 printLocation: namedOptions.printLocation||printLocation,
 image: variationImages[0] || imageUrl || null,
@@ -2522,6 +2524,7 @@ app.get("/admin/products", requireAdmin, async (req, res) => {
         type: p.type,
         subcategory: p.subcategory || null,
         totalInventory,
+        barcodes: (p.variations || []).flatMap(v => [v.sku, v.barcode].filter(Boolean)),
         flags,
       };
     });
