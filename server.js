@@ -2136,6 +2136,7 @@ imageIds: variationImageIds,
       audience,
       subcategory,
       image: imageUrl,
+      images: [...new Set([imageUrl, ...(data.imageIds||[]).map(id=>imageIdToUrl[id])].filter(Boolean))],
       variations,
     });
   }
@@ -2571,6 +2572,10 @@ app.get("/admin/barcode-products", requireAdmin, async (req, res) => {
       name: p.name,
       type: p.type || null,
       subcategory: p.subcategory || null,
+      photos: [...new Map([
+        ...(p.variations||[]).flatMap(v=>(v.images||[v.image]).filter(Boolean).map(url=>[url,{url,label:v.name||p.name}])),
+        ...(p.images||[p.image]).filter(Boolean).map(url=>[url,{url,label:p.name}]),
+      ]).values()],
       variations: (p.variations || []).map((v) => ({
         id: v.id,
         name: v.name,

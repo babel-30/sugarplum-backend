@@ -3188,6 +3188,7 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="barcode-product" data-product-id="${escapeHtml(p.id)}">
           <div class="barcode-product-header">
             <button type="button" class="barcode-toggle" aria-label="Toggle variants">▾</button>
+            ${p.photos?.length ? `<button type="button" class="inventory-photo" data-photos="${escapeHtml(JSON.stringify(p.photos))}" data-name="${safeName}" aria-label="View photos for ${safeName}"><img loading="lazy" src="${escapeHtml(p.photos[0].url)}" alt="${safeName}"></button>` : '<span class="inventory-no-photo">No photo</span>'}
             <div class="barcode-product-title">
               <div class="barcode-product-name">${safeName}</div>
               <div class="barcode-product-subcat">${
