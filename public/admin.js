@@ -25,6 +25,18 @@ function toAbsoluteUrl(maybeRelative) {
   return `${base}${rel}`;
 }
 
+async function readInventoryResponse(res) {
+  if (res.status === 401 || res.status === 403) throw new Error('Your admin session needs refreshing. Sign in again before retrying. Verify current Square stock first.');
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch {
+    throw new Error('The server did not return an inventory confirmation. Square may or may not have received the change. Check current stock before retrying to avoid counting twice.');
+  }
+  if (!res.ok) throw new Error(data.error || 'Inventory update failed. Verify current Square stock before retrying.');
+  if (!data.ok || !Array.isArray(data.applied)) throw new Error('Inventory confirmation was incomplete. Check Square stock before retrying.');
+  return data;
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   // =======================
   //  AUTH GUARD
@@ -2358,6 +2370,21 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!el) return;
     el.textContent = msg;
     el.style.color = isError ? "#a23b32" : "#256044";
+    if (isError && el === barcodeStatusEl) {
+      let popup = document.getElementById('inventory-error-popup');
+      if (!popup) {
+        popup = document.createElement('dialog');
+        popup.id = 'inventory-error-popup';
+        popup.setAttribute('role','alertdialog');
+        popup.setAttribute('aria-labelledby','inventory-error-title');
+        popup.setAttribute('aria-describedby','inventory-error-message');
+        popup.innerHTML = '<h2 id="inventory-error-title">Inventory & labels need attention</h2><p id="inventory-error-message" style="white-space:pre-wrap"></p><button type="button">Got it</button>';
+        document.body.append(popup);
+        popup.querySelector('button').onclick = () => popup.close();
+      }
+      popup.querySelector('p').textContent = msg;
+      if (!popup.open) popup.showModal();
+    }
   }
 
   function escapeHtml(str) {
@@ -3709,7 +3736,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const review=updates.slice(0,10).map(u=>`${u.sku}: ${u.newQty>0?'+':''}${u.newQty}`).join('\n');
     if(!confirm(`Apply these stock changes to Square?\n\n${review}${updates.length>10?'\n… and '+(updates.length-10)+' more SKUs':''}\n\n${updates.length} SKUs · Net change ${updates.reduce((n,u)=>n+u.newQty,0)}`))return;
     barcodeApplyInventoryBtn.disabled=true;showStatus(barcodeStatusEl,'Updating Square inventory…');
-    try{const res=await adminFetch('/admin/apply-inventory-count',{method:'POST',body:JSON.stringify({updates})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Inventory update failed');
+    try{const res=await adminFetch('/admin/apply-inventory-count',{method:'POST',body:JSON.stringify({updates})});const data=await readInventoryResponse(res);
       for(const item of data.applied||[]){const sku=item.input?.sku||item.sku;if(sku)delete scanCountsBySku[sku];}
       await loadBarcodeProducts();
       const errors=data.errors||[];showStatus(barcodeStatusEl,`${data.appliedCount||0} changes applied.${errors.length?' '+errors.length+' changes were not applied: '+errors.map(e=>`${e.input?.sku||'SKU'} — ${e.error}`).join('; '):' Square stock refreshed.'}`,errors.length>0);
