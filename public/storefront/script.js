@@ -2122,6 +2122,17 @@ function getKioskFilteredProducts() {
   });
 }
 
+function kioskSelectionPhotos(product, color, size, print) {
+  const photos = v => [...new Set([...(v.images || []), v.image].filter(Boolean))];
+  const sameColor = (product.squareVariations || []).filter(v => (v.color || "Default") === color);
+  const ranked = sameColor.slice().sort((a, b) => {
+    const score = v => (v.size === size ? 2 : 0) +
+      (normalizePrintSide(v.printLocation || inferPrintLocationFromName(v.name)) === normalizePrintSide(print) ? 1 : 0);
+    return score(b) - score(a);
+  });
+  return ranked.map(photos).find(images => images.length) || photos(product);
+}
+
 function renderKiosk() {
   if (!kioskGrid) return;
 
@@ -2204,7 +2215,8 @@ function renderKiosk() {
       return "Ask for availability";
     }
 
-    const initialColor = window.BrackishVariations?.defaultColor(p,colors) || colors[0] || Object.keys(sizesByColor)[0] || "";
+    const filteredColor = kioskColorFilterSelect?.value;
+    const initialColor = (colors.includes(filteredColor) ? filteredColor : "") || window.BrackishVariations?.defaultColor(p,colors) || colors[0] || Object.keys(sizesByColor)[0] || "";
     let initialSize = "";
     const initialSet = sizesByColor[initialColor];
     if (initialSet && initialSet.size > 0) initialSize = Array.from(initialSet).sort(window.BrackishVariations?.compareSizes)[0];
@@ -2280,6 +2292,13 @@ function renderKiosk() {
     const printSelect = div.querySelector(".kiosk-print");
     const qtyEl = div.querySelector(".kiosk-qty");
     const viewBtn = div.querySelector(".product-view-btn");
+    const kioskImage = div.querySelector(".product-img");
+    const selectedPhotos = () => kioskSelectionPhotos(p, colorSelect?.value, sizeSelect?.value, printSelect?.value);
+    const syncPhoto = () => {
+      const images = selectedPhotos();
+      kioskImage.src = images[0] || "https://via.placeholder.com/300x300?text=No+Image";
+      kioskImage.alt = `${p.name} - ${colorSelect?.value || ""}`;
+    };
     const detailsLink=document.createElement("a");detailsLink.href="product.html?id="+encodeURIComponent(p.id);detailsLink.textContent="Details & share →";detailsLink.className="br-product-details-link";div.appendChild(detailsLink);
 
     if (colorSelect && sizeSelect && qtyEl) {
@@ -2316,6 +2335,7 @@ function renderKiosk() {
         const pr = printSelect ? normalizePrintSide(printSelect.value) : null;
         const qtyText = getQtyText(c, s, pr);
         qtyEl.innerHTML = `<strong>Qty Available:</strong> ${qtyText}`;
+        syncPhoto();
       };
 
       colorSelect.addEventListener("change", () => {
@@ -2346,9 +2366,10 @@ function renderKiosk() {
       updateQty();
     }
 
-    if (viewBtn && p.image) {
+    if (viewBtn) {
       viewBtn.addEventListener("click", () => {
-        openImageModal(p.image, p.name);
+        const images = selectedPhotos();
+        if (images.length) openImageModal(images[0], `${p.name} - ${colorSelect?.value || ""}`, images);
       });
     }
 
